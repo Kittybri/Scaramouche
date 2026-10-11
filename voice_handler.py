@@ -3,13 +3,17 @@ voice_handler.py — Scaramouche Bot (The Balladeer)
 Voice ID: fb95ab47841a4db189cb35fb619d4ea1
 """
 
+from __future__ import annotations
+
 import io
 import asyncio
+import logging
 import httpx
 import ormsgpack
 
 VOICE_ID      = "fb95ab47841a4db189cb35fb619d4ea1"  # Scaramouche voice
 FISH_API_URL  = "https://api.fish.audio/v1/tts"
+log = logging.getLogger(__name__)
 
 
 def _fish_tts_blocking(text: str, api_key: str, chunk_length: int = 220) -> bytes | None:
@@ -31,12 +35,12 @@ def _fish_tts_blocking(text: str, api_key: str, chunk_length: int = 220) -> byte
         with httpx.Client(timeout=60) as client:
             resp = client.post(FISH_API_URL, content=payload, headers=headers)
         if resp.status_code == 200:
-            print(f"[Fish Audio] ✓ {len(resp.content):,} bytes")
+            log.debug("Fish Audio response received", extra={"audio_bytes": len(resp.content)})
             return resp.content
-        print(f"[Fish Audio] HTTP {resp.status_code}: {resp.text[:200]}")
+        log.warning("Fish Audio request failed", extra={"http_status": resp.status_code})
         return None
     except Exception as e:
-        print(f"[Fish Audio] {type(e).__name__}: {e}")
+        log.warning("Fish Audio request failed", extra={"error_category": type(e).__name__})
         return None
 
 
@@ -53,7 +57,7 @@ async def generate_tts_gtts(text: str) -> bytes | None:
         buf.seek(0)
         return buf.read()
     except Exception as e:
-        print(f"[gTTS] {e}")
+        log.warning("gTTS generation failed", extra={"error_category": type(e).__name__})
         return None
 
 
@@ -105,5 +109,5 @@ async def get_audio_mooded(text: str, fish_audio_key: str, mood: int = 0, style:
         if audio: return audio
         return await generate_tts_gtts(text)
     except Exception as e:
-        print(f"[Fish Mooded] {e}")
+        log.warning("mooded voice generation failed", extra={"error_category": type(e).__name__})
         return await generate_tts_gtts(text)

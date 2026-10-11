@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import random
 import re
 from collections import Counter, deque
@@ -8,6 +10,42 @@ _RUNTIME_RECENT: dict[str, deque[str]] = {
     "scaramouche": deque(maxlen=80),
     "wanderer": deque(maxlen=80),
 }
+
+
+def response_shape(text: str) -> dict[str, int | bool | str]:
+    """Describe cheap structural traits without semantic/model calls."""
+    cleaned = (text or "").strip()
+    sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", cleaned) if part.strip()]
+    words = re.findall(r"\b[\w']+\b", cleaned)
+    first = sentences[0] if sentences else cleaned
+    opening = "interjection" if re.match(r"^(tch|hmph|heh|well|honestly)\b", cleaned, re.I) else (
+        "question" if first.endswith("?") else "statement"
+    )
+    return {
+        "sentence_count": len(sentences) or (1 if cleaned else 0),
+        "opening_type": opening,
+        "first_sentence_words": len(re.findall(r"\b[\w']+\b", first)),
+        "question_count": cleaned.count("?"),
+        "length_band": "short" if len(words) <= 8 else "medium" if len(words) <= 30 else "long",
+        "ends_question": cleaned.endswith("?"),
+        "starts_insult": bool(re.match(r"^(idiot|fool|pathetic|predictable|weak|boring)\b", cleaned, re.I)),
+        "has_admission": bool(re.search(r"\b(i care|i miss|i was wrong|i need|i wanted)\b", cleaned, re.I)),
+    }
+
+
+def shape_signature(text: str) -> str:
+    shape = response_shape(text)
+    return "|".join(str(shape[key]) for key in (
+        "sentence_count", "opening_type", "first_sentence_words", "question_count",
+        "length_band", "ends_question", "starts_insult", "has_admission",
+    ))
+
+
+def repeated_shape(text: str, recent_messages: list[str], threshold: int = 3) -> bool:
+    if not text or len(recent_messages) < threshold:
+        return False
+    signature = shape_signature(text)
+    return sum(shape_signature(old) == signature for old in recent_messages[:12] if old) >= threshold
 
 
 _OPENING_VARIANTS: dict[str, list[tuple[str, re.Pattern[str], list[str]]]] = {
@@ -235,7 +273,10 @@ def build_prompt_guard(bot_name: str, recent_messages: list[str]) -> str:
     stale_openings = [opening for opening, count in opening_counts.items() if count >= 2][:6]
     stale_phrases = [phrase for phrase, count in _phrase_counts(bot_name, recent_messages).items() if count >= 2][:6]
 
-    if not stale_openings and not stale_phrases:
+    shape_counts = Counter(shape_signature(text) for text in recent_messages[:20] if text)
+    stale_shapes = [signature for signature, count in shape_counts.items() if count >= 3][:3]
+
+    if not stale_openings and not stale_phrases and not stale_shapes:
         return ""
 
     lines = [
@@ -243,9 +284,16 @@ def build_prompt_guard(bot_name: str, recent_messages: list[str]) -> str:
         "You have been falling into phrase habits. Keep the tone, but change the wording and sentence shape.",
     ]
     if stale_openings:
-        lines.append("Avoid these recent openings: " + "; ".join(stale_openings))
+        # Do not echo arbitrary openings: the global anti-repeat sample can
+        # include bot replies from another user's private conversation.
+        lines.append("Several recent first clauses repeated. Use a genuinely new opening.")
     if stale_phrases:
         lines.append("Do not use these stale signature phrases right now: " + "; ".join(stale_phrases))
+    if stale_shapes:
+        lines.append(
+            "Recent replies reused the same structural shape. Change sentence count, opening type, "
+            "length band, question placement, and whether the answer or mockery comes first."
+        )
     lines.append("Do not recycle the same first clause, favorite interjection, or same mockery template.")
     return "\n".join(lines)
 
@@ -296,7 +344,7 @@ def replace_opening_phrase(bot_name: str, text: str, recent_messages: list[str] 
     return updated
 
 
-def looks_repetitive(text: str, recent_messages: list[str]) -> bool:
+def looks_repetitive(text: str, recent_messages: list[str], *, include_shape: bool = True) -> bool:
     normalized = _normalize(text)
     if not normalized or len(normalized) < 8:
         return False
@@ -312,7 +360,7 @@ def looks_repetitive(text: str, recent_messages: list[str]) -> bool:
             return True
         if SequenceMatcher(None, normalized, recent_normalized).ratio() >= 0.91:
             return True
-    return False
+    return repeated_shape(text, recent_messages) if include_shape else False
 
 
 def fallback_reply(bot_name: str, recent_messages: list[str]) -> str:

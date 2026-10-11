@@ -5,35 +5,38 @@ inside jokes, absence tracking, anniversaries, slow burn, personality drift,
 memory summaries, muted users, contradiction tracking, name progression.
 """
 
+from __future__ import annotations
+
 import aiosqlite
 import time
 import json
+import logging
 import os
 
 # Use Railway volume if available, otherwise current directory
 _data_dir = "/data" if os.path.isdir("/data") else "."
 DB_PATH = os.path.join(_data_dir, "scaramouche.db")
 SHARED_DB_PATH = os.path.join(_data_dir, "shared_state.db")
+log = logging.getLogger(__name__)
 
 
 class Memory:
-    # In-memory only (resets on restart — intentional for mute)
-    _muted: dict[int, float] = {}
     db_path: str = DB_PATH
     shared_db_path: str = SHARED_DB_PATH
 
-    def __init__(self, bot_name: str = "scaramouche"):
-        global DB_PATH
+    def __init__(self, bot_name: str = "scaramouche", db_path: str | None = None,
+                 shared_db_path: str | None = None):
         self.bot_name = (bot_name or "scaramouche").strip().lower()
-        self.db_path = os.path.join(_data_dir, f"{self.bot_name}.db")
-        self.shared_db_path = SHARED_DB_PATH
-        DB_PATH = self.db_path
+        self.db_path = os.fspath(db_path or os.path.join(_data_dir, f"{self.bot_name}.db"))
+        self.shared_db_path = os.fspath(shared_db_path or SHARED_DB_PATH)
+        self._muted: dict[int, float] = {}
 
     def _scope_db_path(self, scope: str) -> str:
         return self.shared_db_path if "::" in (scope or "") else self.db_path
 
     async def init(self):
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
+            await self._configure_database(db)
             await db.executescript("""
                 CREATE TABLE IF NOT EXISTS users (
                     user_id          INTEGER PRIMARY KEY,
@@ -98,6 +101,10 @@ class Memory:
                 CREATE TABLE IF NOT EXISTS dm_cooldown (
                     user_id   INTEGER PRIMARY KEY,
                     last_sent REAL DEFAULT 0
+                );
+                CREATE TABLE IF NOT EXISTS bot_mutes (
+                    user_id    INTEGER PRIMARY KEY,
+                    expires_ts REAL NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS reminders (
                     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -218,6 +225,11 @@ class Memory:
                 );
             """)
             migrations = [
+                ("username",           "TEXT"),
+                ("display_name",       "TEXT"),
+                ("romance_mode",       "INTEGER DEFAULT 0"),
+                ("nsfw_mode",          "INTEGER DEFAULT 0"),
+                ("proactive",          "INTEGER DEFAULT 1"),
                 ("allow_dms",          "INTEGER DEFAULT 1"),
                 ("timezone_name",      "TEXT DEFAULT 'America/Los_Angeles'"),
                 ("quiet_hours_start",  "INTEGER DEFAULT 23"),
@@ -233,6 +245,7 @@ class Memory:
                 ("message_count",      "INTEGER DEFAULT 0"),
                 ("milestone_last",     "INTEGER DEFAULT 0"),
                 ("first_seen",         "REAL DEFAULT 0"),
+                ("last_seen",          "REAL DEFAULT 0"),
                 ("last_active",        "REAL DEFAULT 0"),
                 ("greeted_today",      "INTEGER DEFAULT 0"),
                 ("anniversary_last",   "INTEGER DEFAULT 0"),
@@ -256,11 +269,18 @@ class Memory:
             for col, default in migrations:
                 try:
                     await db.execute(f"ALTER TABLE users ADD COLUMN {col} {default}")
-                except Exception:
-                    pass
+                except aiosqlite.OperationalError as exc:
+                    if "duplicate column name" not in str(exc).lower():
+                        log.exception("users migration failed", extra={"column": col})
+                        raise
+            now = time.time()
+            await db.execute("DELETE FROM bot_mutes WHERE expires_ts<=?", (now,))
+            async with db.execute("SELECT user_id,expires_ts FROM bot_mutes") as cur:
+                self._muted = {int(row[0]): float(row[1]) for row in await cur.fetchall()}
             await db.commit()
 
-        async with aiosqlite.connect(self.shared_db_path) as db:
+        async with aiosqlite.connect(self.shared_db_path, timeout=15.0) as db:
+            await self._configure_database(db)
             await db.executescript("""
                 CREATE TABLE IF NOT EXISTS shared_users (
                     user_id      INTEGER PRIMARY KEY,
@@ -339,29 +359,66 @@ class Memory:
             ):
                 try:
                     await db.execute(stmt)
-                except Exception:
-                    pass
+                except aiosqlite.OperationalError as exc:
+                    if "duplicate column name" not in str(exc).lower():
+                        log.exception("shared migration failed", extra={"statement": stmt})
+                        raise
             await db.commit()
 
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             try:
                 await db.execute("ALTER TABLE messages ADD COLUMN bot_name TEXT DEFAULT NULL")
-            except Exception:
-                pass
+            except aiosqlite.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
             try:
                 await db.execute("ALTER TABLE scene_state ADD COLUMN important_prop TEXT DEFAULT NULL")
-            except Exception:
-                pass
+            except aiosqlite.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
             await db.execute("UPDATE messages SET bot_name=? WHERE bot_name IS NULL", (self.bot_name,))
             await db.commit()
+
+    @staticmethod
+    async def _configure_database(db: aiosqlite.Connection) -> None:
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute("PRAGMA busy_timeout=15000")
+        await db.execute("PRAGMA synchronous=NORMAL")
+        await db.execute("PRAGMA foreign_keys=ON")
+
+    async def healthcheck(self) -> bool:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
+            async with db.execute("SELECT 1") as cur:
+                row = await cur.fetchone()
+        if not row or row[0] != 1:
+            raise RuntimeError("database health probe failed")
+        return True
+
+    async def integrity_check(self) -> bool:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
+            async with db.execute("PRAGMA quick_check") as cur:
+                row = await cur.fetchone()
+        if not row or row[0] != "ok":
+            raise RuntimeError("database quick_check failed")
+        return True
+
+    async def backup(self, destination: str | None = None) -> str:
+        destination = destination or f"{self.db_path}.backup"
+        os.makedirs(os.path.dirname(os.path.abspath(destination)), exist_ok=True)
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as source:
+            async with aiosqlite.connect(destination, timeout=15.0) as target:
+                await source.backup(target)
+        return destination
 
     # ── Users ────────────────────────────────────────────────────────────────
     async def upsert_user(self, user_id: int, username: str, display_name: str):
         now = time.time()
-        async with aiosqlite.connect(DB_PATH) as db:
-            async with db.execute("SELECT first_seen FROM users WHERE user_id=?", (user_id,)) as cur:
+        previous_last_active = 0.0
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
+            async with db.execute("SELECT first_seen,last_active FROM users WHERE user_id=?", (user_id,)) as cur:
                 row = await cur.fetchone()
             if row:
+                previous_last_active = float(row[1] or 0)
                 await db.execute(
                     "UPDATE users SET username=?,display_name=?,last_seen=?,last_active=? WHERE user_id=?",
                     (username, display_name, now, now, user_id))
@@ -370,7 +427,7 @@ class Memory:
                     "INSERT INTO users (user_id,username,display_name,last_seen,last_active,first_seen) VALUES (?,?,?,?,?,?)",
                     (user_id, username, display_name, now, now, now))
             await db.commit()
-        async with aiosqlite.connect(self.shared_db_path) as db:
+        async with aiosqlite.connect(self.shared_db_path, timeout=15.0) as db:
             async with db.execute("SELECT first_seen FROM shared_users WHERE user_id=?", (user_id,)) as cur:
                 row = await cur.fetchone()
             first_seen = row[0] if row and row[0] else now
@@ -381,9 +438,10 @@ class Memory:
                 (user_id, username, display_name, first_seen, now, now),
             )
             await db.commit()
+        return previous_last_active
 
     async def get_user(self, user_id: int) -> dict | None:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute("""
                 SELECT user_id,username,display_name,romance_mode,nsfw_mode,proactive,allow_dms,
                        timezone_name,quiet_hours_start,quiet_hours_end,dm_frequency_hours,recent_activity_grace_minutes,
@@ -429,7 +487,7 @@ class Memory:
         return user
 
     async def get_user_preferences(self, user_id: int) -> dict:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute(
                 "INSERT INTO user_preferences (user_id) VALUES (?) ON CONFLICT(user_id) DO NOTHING",
                 (user_id,),
@@ -451,7 +509,7 @@ class Memory:
         allowed = {"voice_enabled", "utility_mode", "duo_autoplay", "rp_depth"}
         if field not in allowed:
             raise ValueError(f"Unknown preference: {field}")
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute(
                 "INSERT INTO user_preferences (user_id) VALUES (?) ON CONFLICT(user_id) DO NOTHING",
                 (user_id,),
@@ -460,7 +518,7 @@ class Memory:
             await db.commit()
 
     async def record_topic(self, user_id: int, topic: str):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute(
                 "INSERT INTO user_topics (user_id,topic,count,last_seen) VALUES (?,?,1,?) "
                 "ON CONFLICT(user_id,topic) DO UPDATE SET count=count+1,last_seen=excluded.last_seen",
@@ -469,7 +527,7 @@ class Memory:
             await db.commit()
 
     async def get_top_topics(self, user_id: int, limit: int = 3) -> list[dict]:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute(
                 "SELECT topic,count,last_seen FROM user_topics WHERE user_id=? ORDER BY count DESC,last_seen DESC LIMIT ?",
                 (user_id, limit),
@@ -478,7 +536,7 @@ class Memory:
         return [{"topic": row[0], "count": row[1] or 0, "last_seen": row[2] or 0} for row in rows]
 
     async def add_shared_inside_joke(self, user_id: int, joke: str, source: str = "shared"):
-        async with aiosqlite.connect(self.shared_db_path) as db:
+        async with aiosqlite.connect(self.shared_db_path, timeout=15.0) as db:
             async with db.execute("SELECT COUNT(*) FROM shared_inside_jokes WHERE user_id=?", (user_id,)) as cur:
                 count = (await cur.fetchone())[0]
             if count >= 12:
@@ -493,7 +551,7 @@ class Memory:
             await db.commit()
 
     async def get_random_shared_inside_joke(self, user_id: int) -> str | None:
-        async with aiosqlite.connect(self.shared_db_path) as db:
+        async with aiosqlite.connect(self.shared_db_path, timeout=15.0) as db:
             async with db.execute(
                 "SELECT joke FROM shared_inside_jokes WHERE user_id=? ORDER BY RANDOM() LIMIT 1",
                 (user_id,),
@@ -502,7 +560,7 @@ class Memory:
         return row[0] if row else None
 
     async def has_milestone(self, scope: str, marker: str) -> bool:
-        async with aiosqlite.connect(self._scope_db_path(scope)) as db:
+        async with aiosqlite.connect(self._scope_db_path(scope), timeout=15.0) as db:
             async with db.execute(
                 "SELECT 1 FROM relationship_milestones WHERE scope=? AND marker=?",
                 (scope, marker),
@@ -510,7 +568,7 @@ class Memory:
                 return bool(await cur.fetchone())
 
     async def add_milestone(self, scope: str, marker: str, note: str):
-        async with aiosqlite.connect(self._scope_db_path(scope)) as db:
+        async with aiosqlite.connect(self._scope_db_path(scope), timeout=15.0) as db:
             await db.execute(
                 "INSERT INTO relationship_milestones (scope,marker,note,ts) VALUES (?,?,?,?) "
                 "ON CONFLICT(scope,marker) DO UPDATE SET note=excluded.note,ts=excluded.ts",
@@ -519,7 +577,7 @@ class Memory:
             await db.commit()
 
     async def get_recent_milestones(self, scope: str, limit: int = 3) -> list[str]:
-        async with aiosqlite.connect(self._scope_db_path(scope)) as db:
+        async with aiosqlite.connect(self._scope_db_path(scope), timeout=15.0) as db:
             async with db.execute(
                 "SELECT note FROM relationship_milestones WHERE scope=? ORDER BY ts DESC LIMIT ?",
                 (scope, limit),
@@ -528,7 +586,7 @@ class Memory:
         return [row[0] for row in rows if row and row[0]]
 
     async def get_scene_state(self, channel_id: int) -> dict | None:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute(
                 "SELECT location,situation,last_beat,emotional_temp,objective,present,important_prop,updated_ts FROM scene_state WHERE channel_id=?",
                 (channel_id,),
@@ -559,7 +617,7 @@ class Memory:
             "important_prop": (fields.get("important_prop") or current.get("important_prop") or "")[:120],
             "updated_ts": time.time(),
         }
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute(
                 "INSERT INTO scene_state (channel_id,location,situation,last_beat,emotional_temp,objective,present,important_prop,updated_ts) "
                 "VALUES (?,?,?,?,?,?,?,?,?) "
@@ -581,12 +639,12 @@ class Memory:
             await db.commit()
 
     async def clear_scene_state(self, channel_id: int):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute("DELETE FROM scene_state WHERE channel_id=?", (channel_id,))
             await db.commit()
 
     async def add_memory_event(self, user_id: int, kind: str, memory: str, weight: int = 1):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute(
                 "SELECT id,weight FROM memory_bank WHERE user_id=? AND kind=? AND memory=?",
                 (user_id, kind[:40], memory[:240]),
@@ -610,7 +668,7 @@ class Memory:
 
     async def get_weighted_memory_event(self, user_id: int) -> dict | None:
         cutoff = time.time() - 3600
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute(
                 "SELECT id,kind,memory,weight FROM memory_bank WHERE user_id=? ORDER BY weight DESC, ts DESC LIMIT 12",
                 (user_id,),
@@ -630,7 +688,7 @@ class Memory:
         return None
 
     async def get_memory_bank_entries(self, user_id: int, limit: int = 8) -> list[dict]:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute(
                 "SELECT kind,memory,weight,last_used,ts FROM memory_bank WHERE user_id=? "
                 "ORDER BY weight DESC, ts DESC LIMIT ?",
@@ -650,34 +708,70 @@ class Memory:
         ]
 
     async def forget_memory_matches(self, user_id: int, query: str) -> dict:
-        needle = (query or "").strip().lower()
+        needle = (query or "").strip().lower()[:80]
         if not needle:
-            return {"topics": 0, "jokes": 0, "shared_jokes": 0, "memories": 0, "callback": 0}
+            return {}
 
-        like = f"%{needle[:80]}%"
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
+            await db.execute("BEGIN IMMEDIATE")
             topic_cur = await db.execute(
-                "DELETE FROM user_topics WHERE user_id=? AND LOWER(topic) LIKE ?",
-                (user_id, like),
+                "DELETE FROM user_topics WHERE user_id=? AND INSTR(LOWER(topic),?)>0",
+                (user_id, needle),
             )
             joke_cur = await db.execute(
-                "DELETE FROM inside_jokes WHERE user_id=? AND LOWER(joke) LIKE ?",
-                (user_id, like),
+                "DELETE FROM inside_jokes WHERE user_id=? AND INSTR(LOWER(joke),?)>0",
+                (user_id, needle),
             )
             memory_cur = await db.execute(
-                "DELETE FROM memory_bank WHERE user_id=? AND (LOWER(kind) LIKE ? OR LOWER(memory) LIKE ?)",
-                (user_id, like, like),
+                "DELETE FROM memory_bank WHERE user_id=? AND "
+                "(INSTR(LOWER(kind),?)>0 OR INSTR(LOWER(memory),?)>0)",
+                (user_id, needle, needle),
             )
-            callback_cur = await db.execute(
-                "UPDATE users SET callback_memory=NULL, callback_ts=0 "
-                "WHERE user_id=? AND callback_memory IS NOT NULL AND LOWER(callback_memory) LIKE ?",
-                (user_id, like),
+            message_cur = await db.execute(
+                "DELETE FROM messages WHERE user_id=? AND INSTR(LOWER(content),?)>0",
+                (user_id, needle),
+            )
+            reminder_cur = await db.execute(
+                "DELETE FROM reminders WHERE user_id=? AND INSTR(LOWER(reminder),?)>0",
+                (user_id, needle),
+            )
+            trivia_cur = await db.execute(
+                "DELETE FROM active_trivia WHERE asker_id=? AND "
+                "(INSTR(LOWER(question),?)>0 OR INSTR(LOWER(answer),?)>0 OR INSTR(LOWER(COALESCE(source_note,'')),?)>0)",
+                (user_id, needle, needle, needle),
+            )
+            milestone_cur = await db.execute(
+                "DELETE FROM relationship_milestones WHERE scope LIKE ? AND INSTR(LOWER(note),?)>0",
+                (f"{self.bot_name}:user:{user_id}%", needle),
+            )
+            user_cur = await db.execute(
+                """UPDATE users SET
+                       callback_memory=CASE WHEN INSTR(LOWER(COALESCE(callback_memory,'')),?)>0 THEN NULL ELSE callback_memory END,
+                       callback_ts=CASE WHEN INSTR(LOWER(COALESCE(callback_memory,'')),?)>0 THEN 0 ELSE callback_ts END,
+                       memory_summary=CASE WHEN INSTR(LOWER(COALESCE(memory_summary,'')),?)>0 THEN NULL ELSE memory_summary END,
+                       summary_msg_count=CASE WHEN INSTR(LOWER(COALESCE(memory_summary,'')),?)>0 THEN 0 ELSE summary_msg_count END,
+                       last_statement=CASE WHEN INSTR(LOWER(COALESCE(last_statement,'')),?)>0 THEN NULL ELSE last_statement END,
+                       conflict_summary=CASE WHEN INSTR(LOWER(COALESCE(conflict_summary,'')),?)>0 THEN NULL ELSE conflict_summary END,
+                       conflict_open=CASE WHEN INSTR(LOWER(COALESCE(conflict_summary,'')),?)>0 THEN 0 ELSE conflict_open END
+                   WHERE user_id=? AND (
+                       INSTR(LOWER(COALESCE(callback_memory,'')),?)>0 OR
+                       INSTR(LOWER(COALESCE(memory_summary,'')),?)>0 OR
+                       INSTR(LOWER(COALESCE(last_statement,'')),?)>0 OR
+                       INSTR(LOWER(COALESCE(conflict_summary,'')),?)>0
+                   )""",
+                (needle, needle, needle, needle, needle, needle, needle, user_id,
+                 needle, needle, needle, needle),
             )
             await db.commit()
-        async with aiosqlite.connect(self.shared_db_path) as db:
+        async with aiosqlite.connect(self.shared_db_path, timeout=15.0) as db:
+            await db.execute("BEGIN IMMEDIATE")
             shared_joke_cur = await db.execute(
-                "DELETE FROM shared_inside_jokes WHERE user_id=? AND LOWER(joke) LIKE ?",
-                (user_id, like),
+                "DELETE FROM shared_inside_jokes WHERE user_id=? AND INSTR(LOWER(joke),?)>0",
+                (user_id, needle),
+            )
+            shared_milestone_cur = await db.execute(
+                "DELETE FROM relationship_milestones WHERE scope LIKE ? AND INSTR(LOWER(note),?)>0",
+                (f"%user:{user_id}", needle),
             )
             await db.commit()
         return {
@@ -685,23 +779,27 @@ class Memory:
             "jokes": int(joke_cur.rowcount or 0),
             "shared_jokes": int(shared_joke_cur.rowcount or 0),
             "memories": int(memory_cur.rowcount or 0),
-            "callback": int(callback_cur.rowcount or 0),
+            "messages": int(message_cur.rowcount or 0),
+            "reminders": int(reminder_cur.rowcount or 0),
+            "trivia": int(trivia_cur.rowcount or 0),
+            "milestones": int(milestone_cur.rowcount or 0) + int(shared_milestone_cur.rowcount or 0),
+            "profile_fields": int(user_cur.rowcount or 0),
         }
 
     async def set_mode(self, user_id: int, field: str, value: bool):
         allowed = {"nsfw_mode","romance_mode","proactive","allow_dms"}
         if field not in allowed: raise ValueError(f"Unknown: {field}")
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute(f"UPDATE users SET {field}=? WHERE user_id=?", (int(value), user_id))
             await db.commit()
 
     async def set_timezone(self, user_id: int, timezone_name: str):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute("UPDATE users SET timezone_name=? WHERE user_id=?", (timezone_name[:64], user_id))
             await db.commit()
 
     async def set_quiet_hours(self, user_id: int, start_hour: int, end_hour: int):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute(
                 "UPDATE users SET quiet_hours_start=?, quiet_hours_end=? WHERE user_id=?",
                 (int(start_hour) % 24, int(end_hour) % 24, user_id),
@@ -709,12 +807,12 @@ class Memory:
             await db.commit()
 
     async def set_dm_frequency(self, user_id: int, hours: int):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute("UPDATE users SET dm_frequency_hours=? WHERE user_id=?", (max(1, min(72, int(hours))), user_id))
             await db.commit()
 
     async def set_recent_activity_grace(self, user_id: int, minutes: int):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute(
                 "UPDATE users SET recent_activity_grace_minutes=? WHERE user_id=?",
                 (max(5, min(720, int(minutes))), user_id),
@@ -730,7 +828,7 @@ class Memory:
         if user.get("last_seen", 0) and (now - user.get("last_seen", 0)) < grace:
             return False
         try:
-            async with aiosqlite.connect(DB_PATH) as db:
+            async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
                 async with db.execute("SELECT last_sent FROM dm_cooldown WHERE user_id=?", (user_id,)) as cur:
                     row = await cur.fetchone()
             if row and row[0]:
@@ -743,12 +841,12 @@ class Memory:
 
     # ── Mood ─────────────────────────────────────────────────────────────────
     async def update_mood(self, user_id: int, delta: int):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute("UPDATE users SET mood=MAX(-10,MIN(10,mood+?)) WHERE user_id=?", (delta, user_id))
             await db.commit()
 
     async def get_mood(self, user_id: int) -> int:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute("SELECT mood FROM users WHERE user_id=?", (user_id,)) as cur:
                 row = await cur.fetchone(); return row[0] if row else 0
 
@@ -759,30 +857,30 @@ class Memory:
 
     # ── Affection ─────────────────────────────────────────────────────────────
     async def update_affection(self, user_id: int, delta: int):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute("UPDATE users SET affection=MAX(0,MIN(100,affection+?)) WHERE user_id=?", (delta, user_id))
             await db.commit()
 
     async def set_affection_nick(self, user_id: int, nick: str):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute("UPDATE users SET affection_nick=? WHERE user_id=?", (nick, user_id))
             await db.commit()
 
     # ── Trust ─────────────────────────────────────────────────────────────────
     async def update_trust(self, user_id: int, delta: int):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute("UPDATE users SET trust=MAX(0,MIN(100,trust+?)) WHERE user_id=?", (delta, user_id))
             await db.commit()
 
     # ── Grudge ────────────────────────────────────────────────────────────────
     async def set_grudge_nick(self, user_id: int, nick: str | None):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute("UPDATE users SET grudge_nick=? WHERE user_id=?", (nick, user_id))
             await db.commit()
 
     # ── Rivalry ───────────────────────────────────────────────────────────────
     async def set_rival(self, user_id: int, rival_id: int | None):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute("UPDATE users SET rival_id=? WHERE user_id=?", (rival_id, user_id))
             await db.commit()
 
@@ -794,7 +892,7 @@ class Memory:
         Threshold is 7 consecutive kind days.
         """
         today = int(time.time() // 86400)
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute(
                 "SELECT slow_burn, slow_burn_day, slow_burn_fired FROM users WHERE user_id=?",
                 (user_id,)
@@ -819,26 +917,26 @@ class Memory:
 
         # Threshold: 7 consecutive kind days, hasn't fired yet
         if new_score >= 7 and not fired:
-            async with aiosqlite.connect(DB_PATH) as db:
+            async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
                 await db.execute("UPDATE users SET slow_burn_fired=1 WHERE user_id=?", (user_id,))
                 await db.commit()
             return new_score, True
         return new_score, False
 
     async def reset_slow_burn_fired(self, user_id: int):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute("UPDATE users SET slow_burn=0, slow_burn_fired=0 WHERE user_id=?", (user_id,))
             await db.commit()
 
     # ── Personality drift ─────────────────────────────────────────────────────
     async def update_drift(self, user_id: int, delta: int):
         """Drift: 0=unchanged, 100=maximally drifted. Changes subtly over weeks."""
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute("UPDATE users SET drift_score=MAX(0,MIN(100,drift_score+?)) WHERE user_id=?", (delta, user_id))
             await db.commit()
 
     async def set_style_profile(self, user_id: int, profile: dict):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute(
                 "UPDATE users SET style_profile=? WHERE user_id=?",
                 (json.dumps(profile, ensure_ascii=True)[:1200], user_id),
@@ -846,12 +944,12 @@ class Memory:
             await db.commit()
 
     async def set_emotional_arc(self, user_id: int, arc: str):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute("UPDATE users SET emotional_arc=? WHERE user_id=?", (arc[:40], user_id))
             await db.commit()
 
     async def open_conflict(self, user_id: int, summary: str):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute(
                 "UPDATE users SET conflict_open=1, conflict_summary=?, last_conflict_ts=?, repair_progress=0 WHERE user_id=?",
                 (summary[:300], time.time(), user_id),
@@ -859,7 +957,7 @@ class Memory:
             await db.commit()
 
     async def resolve_conflict(self, user_id: int):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute(
                 "UPDATE users SET conflict_open=0, conflict_summary=NULL, repair_progress=0, repair_count=repair_count+1 WHERE user_id=?",
                 (user_id,),
@@ -875,7 +973,7 @@ class Memory:
         updated_summary = summary
         if repair_text:
             updated_summary = f"{summary[:140]} | repair: {repair_text[:120]}".strip(" |")
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute(
                 "UPDATE users SET conflict_summary=?, repair_progress=? WHERE user_id=?",
                 (updated_summary[:300], progress, user_id),
@@ -891,7 +989,7 @@ class Memory:
         return False
 
     async def set_callback_memory(self, user_id: int, callback_memory: str):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute(
                 "UPDATE users SET callback_memory=?, callback_ts=? WHERE user_id=?",
                 (callback_memory[:300], time.time(), user_id),
@@ -900,7 +998,7 @@ class Memory:
 
     async def consume_phrase(self, scope: str, phrase_key: str, cooldown_seconds: int) -> bool:
         now = time.time()
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute(
                 "SELECT last_used FROM phrase_cooldowns WHERE scope=? AND phrase_key=?",
                 (scope, phrase_key),
@@ -918,7 +1016,7 @@ class Memory:
 
     async def consume_phrase_with_status(self, scope: str, phrase_key: str, cooldown_seconds: int) -> tuple[bool, int]:
         now = time.time()
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute(
                 "SELECT last_used FROM phrase_cooldowns WHERE scope=? AND phrase_key=?",
                 (scope, phrase_key),
@@ -936,7 +1034,7 @@ class Memory:
         return True, 0
 
     async def get_bot_relationship(self, pair_key: str) -> dict:
-        async with aiosqlite.connect(self.shared_db_path) as db:
+        async with aiosqlite.connect(self.shared_db_path, timeout=15.0) as db:
             await db.execute(
                 "INSERT INTO bot_relationships (pair_key) VALUES (?) ON CONFLICT(pair_key) DO NOTHING",
                 (pair_key,),
@@ -985,7 +1083,7 @@ class Memory:
             if not notes or notes[-1] != cleaned:
                 notes.append(cleaned)
                 notes = notes[-6:]
-        async with aiosqlite.connect(self.shared_db_path) as db:
+        async with aiosqlite.connect(self.shared_db_path, timeout=15.0) as db:
             await db.execute(
                 "UPDATE bot_relationships SET stage=?, respect=?, tension=?, shared_history=?, last_exchange=?, last_theme=? WHERE pair_key=?",
                 (
@@ -1001,7 +1099,7 @@ class Memory:
             await db.commit()
 
     async def record_bot_banter(self, pair_key: str, speaker: str, content: str, theme: str | None = None):
-        async with aiosqlite.connect(self.shared_db_path) as db:
+        async with aiosqlite.connect(self.shared_db_path, timeout=15.0) as db:
             await db.execute(
                 "INSERT INTO bot_banter_log (pair_key,speaker,content,theme,ts) VALUES (?,?,?,?,?)",
                 (pair_key, speaker[:40], content[:500], (theme or "")[:60], time.time()),
@@ -1013,7 +1111,7 @@ class Memory:
             await db.commit()
 
     async def get_recent_bot_banter(self, pair_key: str, limit: int = 8) -> list[dict]:
-        async with aiosqlite.connect(self.shared_db_path) as db:
+        async with aiosqlite.connect(self.shared_db_path, timeout=15.0) as db:
             async with db.execute(
                 "SELECT speaker,content,theme,ts FROM bot_banter_log WHERE pair_key=? ORDER BY ts DESC LIMIT ?",
                 (pair_key, limit),
@@ -1037,7 +1135,7 @@ class Memory:
         ttl_seconds: int = 900,
     ):
         now = time.time()
-        async with aiosqlite.connect(self.shared_db_path) as db:
+        async with aiosqlite.connect(self.shared_db_path, timeout=15.0) as db:
             await db.execute(
                 "INSERT INTO duo_sessions (channel_id,mode,topic,initiator_bot,initiator_user_id,last_speaker,awaiting_bot,autoplay_remaining,next_autoplay_ts,expires_ts,updated_ts) VALUES (?,?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(channel_id) DO UPDATE SET mode=excluded.mode, topic=excluded.topic, "
@@ -1061,7 +1159,7 @@ class Memory:
 
     async def get_duo_session(self, channel_id: int) -> dict | None:
         now = time.time()
-        async with aiosqlite.connect(self.shared_db_path) as db:
+        async with aiosqlite.connect(self.shared_db_path, timeout=15.0) as db:
             async with db.execute(
                 "SELECT mode,topic,initiator_bot,initiator_user_id,last_speaker,awaiting_bot,autoplay_remaining,next_autoplay_ts,expires_ts,updated_ts "
                 "FROM duo_sessions WHERE channel_id=?",
@@ -1101,7 +1199,7 @@ class Memory:
             elif partner_bot:
                 awaiting_bot = partner_bot[:40]
                 next_autoplay_ts = now + max(2, int(autoplay_delay))
-        async with aiosqlite.connect(self.shared_db_path) as db:
+        async with aiosqlite.connect(self.shared_db_path, timeout=15.0) as db:
             await db.execute(
                 "UPDATE duo_sessions SET last_speaker=?, awaiting_bot=?, autoplay_remaining=?, next_autoplay_ts=?, updated_ts=?, expires_ts=? WHERE channel_id=?",
                 (speaker_bot[:40], awaiting_bot[:40], autoplay_remaining, next_autoplay_ts, now, now + ttl_seconds, channel_id),
@@ -1110,7 +1208,7 @@ class Memory:
 
     async def get_due_duo_sessions(self, bot_name: str) -> list[dict]:
         now = time.time()
-        async with aiosqlite.connect(self.shared_db_path) as db:
+        async with aiosqlite.connect(self.shared_db_path, timeout=15.0) as db:
             async with db.execute(
                 "SELECT channel_id,mode,topic,initiator_bot,initiator_user_id,last_speaker,awaiting_bot,autoplay_remaining,next_autoplay_ts,expires_ts,updated_ts "
                 "FROM duo_sessions WHERE awaiting_bot=? AND autoplay_remaining>0 AND next_autoplay_ts<=? AND expires_ts>?",
@@ -1135,12 +1233,12 @@ class Memory:
         ]
 
     async def clear_duo_session(self, channel_id: int):
-        async with aiosqlite.connect(self.shared_db_path) as db:
+        async with aiosqlite.connect(self.shared_db_path, timeout=15.0) as db:
             await db.execute("DELETE FROM duo_sessions WHERE channel_id=?", (channel_id,))
             await db.commit()
 
     async def set_channel_speaker_mode(self, channel_id: int, speaker_mode: str):
-        async with aiosqlite.connect(self.shared_db_path) as db:
+        async with aiosqlite.connect(self.shared_db_path, timeout=15.0) as db:
             await db.execute(
                 "INSERT INTO channel_speaker_modes (channel_id,speaker_mode,updated_ts) VALUES (?,?,?) "
                 "ON CONFLICT(channel_id) DO UPDATE SET speaker_mode=excluded.speaker_mode, updated_ts=excluded.updated_ts",
@@ -1149,14 +1247,14 @@ class Memory:
             await db.commit()
 
     async def get_channel_speaker_mode(self, channel_id: int) -> str:
-        async with aiosqlite.connect(self.shared_db_path) as db:
+        async with aiosqlite.connect(self.shared_db_path, timeout=15.0) as db:
             async with db.execute("SELECT speaker_mode FROM channel_speaker_modes WHERE channel_id=?", (channel_id,)) as cur:
                 row = await cur.fetchone()
         return (row[0] if row else "auto") or "auto"
 
     async def start_duo_story(self, channel_id: int, story_type: str, topic: str, enemy: str = "") -> int:
         now = time.time()
-        async with aiosqlite.connect(self.shared_db_path) as db:
+        async with aiosqlite.connect(self.shared_db_path, timeout=15.0) as db:
             cur = await db.execute(
                 "INSERT INTO duo_story_log (channel_id,story_type,topic,status,outcome,enemy,ts,updated_ts) VALUES (?,?,?,?,?,?,?,?)",
                 (channel_id, story_type[:40], topic[:300], "open", "", enemy[:120], now, now),
@@ -1165,7 +1263,7 @@ class Memory:
             return cur.lastrowid
 
     async def resolve_duo_story(self, channel_id: int, story_type: str, outcome: str):
-        async with aiosqlite.connect(self.shared_db_path) as db:
+        async with aiosqlite.connect(self.shared_db_path, timeout=15.0) as db:
             await db.execute(
                 "UPDATE duo_story_log SET status='resolved', outcome=?, updated_ts=? "
                 "WHERE id=(SELECT id FROM duo_story_log WHERE channel_id=? AND story_type=? ORDER BY ts DESC LIMIT 1)",
@@ -1174,7 +1272,7 @@ class Memory:
             await db.commit()
 
     async def get_recent_duo_stories(self, channel_id: int, limit: int = 5) -> list[dict]:
-        async with aiosqlite.connect(self.shared_db_path) as db:
+        async with aiosqlite.connect(self.shared_db_path, timeout=15.0) as db:
             async with db.execute(
                 "SELECT story_type,topic,status,outcome,enemy,ts,updated_ts FROM duo_story_log WHERE channel_id=? ORDER BY ts DESC LIMIT ?",
                 (channel_id, limit),
@@ -1195,7 +1293,7 @@ class Memory:
 
     # ── Memory summary ────────────────────────────────────────────────────────
     async def needs_summary(self, user_id: int) -> bool:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute(
                 "SELECT message_count, summary_msg_count FROM users WHERE user_id=?", (user_id,)
             ) as cur:
@@ -1205,7 +1303,7 @@ class Memory:
                 return count >= 500 and (count - last) >= 50
 
     async def save_summary(self, user_id: int, summary: str):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute("SELECT message_count FROM users WHERE user_id=?", (user_id,)) as cur:
                 row = await cur.fetchone(); count = row[0] if row else 0
             await db.execute(
@@ -1215,13 +1313,13 @@ class Memory:
 
     # ── Contradiction tracking ────────────────────────────────────────────────
     async def update_last_statement(self, user_id: int, statement: str):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute("UPDATE users SET last_statement=? WHERE user_id=?", (statement[:300], user_id))
             await db.commit()
 
     # ── Message count & milestones ────────────────────────────────────────────
     async def increment_message_count(self, user_id: int) -> tuple[int, bool]:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute("UPDATE users SET message_count=message_count+1 WHERE user_id=?", (user_id,))
             await db.commit()
             async with db.execute("SELECT message_count,milestone_last FROM users WHERE user_id=?", (user_id,)) as cur:
@@ -1230,14 +1328,14 @@ class Memory:
                 count, last = row
         for m in [50,100,250,500,1000]:
             if count >= m and last < m:
-                async with aiosqlite.connect(DB_PATH) as db:
+                async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
                     await db.execute("UPDATE users SET milestone_last=? WHERE user_id=?", (m, user_id))
                     await db.commit()
                 return count, True
         return count, False
 
     async def get_top_users(self, limit: int = 8) -> list[dict]:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute(
                 "SELECT user_id,display_name,message_count FROM users ORDER BY message_count DESC LIMIT ?", (limit,)
             ) as cur:
@@ -1246,24 +1344,24 @@ class Memory:
 
     # ── Greetings ─────────────────────────────────────────────────────────────
     async def should_greet(self, user_id: int) -> bool:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute("SELECT greeted_today,last_active FROM users WHERE user_id=?", (user_id,)) as cur:
                 row = await cur.fetchone()
                 if not row: return False
                 return not row[0] and (time.time() - (row[1] or 0)) < 172800
 
     async def mark_greeted(self, user_id: int):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute("UPDATE users SET greeted_today=1 WHERE user_id=?", (user_id,))
             await db.commit()
 
     async def reset_daily_greetings(self):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute("UPDATE users SET greeted_today=0"); await db.commit()
 
     # ── Anniversary ───────────────────────────────────────────────────────────
     async def check_anniversary(self, user_id: int) -> bool:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute(
                 "SELECT first_seen,anniversary_last,message_count FROM users WHERE user_id=?", (user_id,)
             ) as cur:
@@ -1279,14 +1377,14 @@ class Memory:
                 return abs(time.time()-ann_ts)<172800 and (time.time()-(ann_last or 0))>365.25*86400*0.9
 
     async def mark_anniversary(self, user_id: int):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute("UPDATE users SET anniversary_last=? WHERE user_id=?", (time.time(), user_id))
             await db.commit()
 
     # ── Absence ───────────────────────────────────────────────────────────────
     async def get_absent_romance_users(self, days: float = 3.0) -> list[dict]:
         cutoff = time.time() - days*86400
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute("""
                 SELECT user_id,display_name,last_active,
                        (julianday('now')-julianday(datetime(last_active,'unixepoch'))) as days_gone
@@ -1298,7 +1396,7 @@ class Memory:
 
     # ── Inside jokes ─────────────────────────────────────────────────────────
     async def add_inside_joke(self, user_id: int, joke: str):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute("SELECT COUNT(*) FROM inside_jokes WHERE user_id=?", (user_id,)) as cur:
                 count = (await cur.fetchone())[0]
             if count >= 10:
@@ -1307,39 +1405,56 @@ class Memory:
             await db.commit()
 
     async def get_random_inside_joke(self, user_id: int) -> str | None:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute("SELECT joke FROM inside_jokes WHERE user_id=? ORDER BY RANDOM() LIMIT 1", (user_id,)) as cur:
                 row = await cur.fetchone(); return row[0] if row else None
 
     async def get_joke_count(self, user_id: int) -> int:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute("SELECT COUNT(*) FROM inside_jokes WHERE user_id=?", (user_id,)) as cur:
                 return (await cur.fetchone())[0]
 
     # ── Conversation history ──────────────────────────────────────────────────
-    async def get_history(self, user_id: int, channel_id: int, limit: int = 200) -> list[dict]:
-        async with aiosqlite.connect(DB_PATH) as db:
+    async def get_history(self, user_id: int, channel_id: int, limit: int = 200, *,
+                          max_chars_per_message: int | None = None,
+                          max_total_chars: int | None = None) -> list[dict]:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute("""
                 SELECT role,content FROM messages WHERE user_id=? AND channel_id=? AND (bot_name=? OR bot_name IS NULL)
                 ORDER BY ts DESC LIMIT ?
             """, (user_id,channel_id,self.bot_name,limit)) as cur:
                 rows = await cur.fetchall()
-        return [{"role":r[0],"content":r[1]} for r in reversed(rows)]
+        bounded: list[dict] = []
+        remaining = max_total_chars if max_total_chars and max_total_chars > 0 else None
+        # Rows are newest-first. Apply the total budget from the most relevant
+        # end, then restore chronological order for the provider.
+        for role, raw_content in rows:
+            content = str(raw_content or "")
+            if max_chars_per_message and max_chars_per_message > 0:
+                content = content[:max_chars_per_message]
+            if remaining is not None:
+                if remaining <= 0:
+                    break
+                content = content[:remaining]
+                remaining -= len(content)
+            if content:
+                bounded.append({"role": role, "content": content})
+        return list(reversed(bounded))
 
     async def get_random_old_message(self, user_id: int) -> str | None:
         cutoff = time.time()-86400*2
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute("SELECT content FROM messages WHERE user_id=? AND role='user' AND (bot_name=? OR bot_name IS NULL) AND ts<? ORDER BY RANDOM() LIMIT 1", (user_id,self.bot_name,cutoff)) as cur:
                 row = await cur.fetchone(); return row[0] if row else None
 
     async def get_recent_messages(self, user_id: int, limit: int = 10) -> list[str]:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute("SELECT content FROM messages WHERE user_id=? AND role='user' AND (bot_name=? OR bot_name IS NULL) ORDER BY ts DESC LIMIT ?", (user_id,self.bot_name,limit)) as cur:
                 return [r[0] for r in await cur.fetchall()]
 
     async def get_channel_recent(self, channel_id: int, limit: int = 20) -> list[dict]:
         """Get recent messages from all users in a channel."""
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute("""
                 SELECT m.role, m.content, u.display_name FROM messages m
                 LEFT JOIN users u ON m.user_id=u.user_id
@@ -1349,7 +1464,7 @@ class Memory:
         return [{"role":r[0],"content":r[1],"name":r[2] or "?"} for r in reversed(rows)]
 
     async def add_message(self, user_id: int, channel_id: int, role: str, content: str):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute("INSERT INTO messages (user_id,channel_id,role,content,ts,bot_name) VALUES (?,?,?,?,?,?)", (user_id,channel_id,role,content,time.time(),self.bot_name))
             await db.commit()
 
@@ -1370,47 +1485,67 @@ class Memory:
         query += " ORDER BY ts DESC LIMIT ?"
         params.append(limit)
 
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute(query, params) as cur:
                 rows = await cur.fetchall()
         return [row[0] for row in rows if row and row[0]]
 
     async def reset_user(self, user_id: int):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
+            await db.execute("BEGIN IMMEDIATE")
             await db.execute("DELETE FROM messages WHERE user_id=?", (user_id,))
             await db.execute("DELETE FROM inside_jokes WHERE user_id=?", (user_id,))
+            await db.execute("DELETE FROM shared_inside_jokes WHERE user_id=?", (user_id,))
             await db.execute("DELETE FROM user_topics WHERE user_id=?", (user_id,))
             await db.execute("DELETE FROM memory_bank WHERE user_id=?", (user_id,))
+            await db.execute("DELETE FROM reminders WHERE user_id=?", (user_id,))
+            await db.execute("DELETE FROM trivia WHERE user_id=?", (user_id,))
+            await db.execute("DELETE FROM active_trivia WHERE asker_id=?", (user_id,))
+            await db.execute("DELETE FROM roast_battles WHERE user1_id=? OR user2_id=?", (user_id, user_id))
+            await db.execute("DELETE FROM user_preferences WHERE user_id=?", (user_id,))
+            await db.execute("DELETE FROM dm_cooldown WHERE user_id=?", (user_id,))
+            await db.execute("DELETE FROM bot_mutes WHERE user_id=?", (user_id,))
             await db.execute("DELETE FROM relationship_milestones WHERE scope LIKE ?", (f"{self.bot_name}:user:{user_id}%",))
             await db.execute("DELETE FROM scene_state WHERE channel_id=?", (user_id,))
-            await db.execute("""UPDATE users SET mood=0,affection=0,trust=0,rival_id=NULL,grudge_nick=NULL,
-                affection_nick=NULL,message_count=0,milestone_last=0,slow_burn=0,slow_burn_fired=0,
-                drift_score=0,memory_summary=NULL,last_statement=NULL,style_profile=NULL,emotional_arc='guarded',
-                conflict_open=0,conflict_summary=NULL,last_conflict_ts=0,repair_progress=0,
-                callback_memory=NULL,callback_ts=0,repair_count=0
-                WHERE user_id=?""", (user_id,))
+            await db.execute("DELETE FROM users WHERE user_id=?", (user_id,))
             await db.commit()
-        async with aiosqlite.connect(self.shared_db_path) as db:
+        async with aiosqlite.connect(self.shared_db_path, timeout=15.0) as db:
+            await db.execute("BEGIN IMMEDIATE")
             await db.execute("DELETE FROM shared_inside_jokes WHERE user_id=?", (user_id,))
             await db.execute("DELETE FROM relationship_milestones WHERE scope LIKE ?", (f"%user:{user_id}",))
+            await db.execute("DELETE FROM duo_sessions WHERE initiator_user_id=?", (user_id,))
+            await db.execute("DELETE FROM shared_users WHERE user_id=?", (user_id,))
             await db.commit()
+        self._muted.pop(user_id, None)
 
-    # ── Mute (in-memory) ──────────────────────────────────────────────────────
-    def mute_user(self, user_id: int, seconds: int = 600):
-        Memory._muted[user_id] = time.time() + seconds
+    # ── Mute ──────────────────────────────────────────────────────────────────
+    async def mute_user(self, user_id: int, seconds: int = 600):
+        expires = time.time() + max(60, min(int(seconds), 86_400))
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
+            await db.execute(
+                "INSERT INTO bot_mutes(user_id,expires_ts) VALUES(?,?) "
+                "ON CONFLICT(user_id) DO UPDATE SET expires_ts=excluded.expires_ts",
+                (user_id, expires),
+            )
+            await db.commit()
+        self._muted[user_id] = expires
 
-    def is_muted(self, user_id: int) -> bool:
-        exp = Memory._muted.get(user_id, 0)
+    async def is_muted(self, user_id: int) -> bool:
+        exp = self._muted.get(user_id, 0)
         if exp and time.time() > exp:
-            del Memory._muted[user_id]; return False
+            await self.unmute_user(user_id)
+            return False
         return bool(exp)
 
-    def unmute_user(self, user_id: int):
-        Memory._muted.pop(user_id, None)
+    async def unmute_user(self, user_id: int):
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
+            await db.execute("DELETE FROM bot_mutes WHERE user_id=?", (user_id,))
+            await db.commit()
+        self._muted.pop(user_id, None)
 
     # ── Trivia ────────────────────────────────────────────────────────────────
     async def update_trivia(self, user_id: int, correct: bool):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute("SELECT id FROM trivia WHERE user_id=?", (user_id,)) as cur:
                 row = await cur.fetchone()
             if row:
@@ -1422,7 +1557,7 @@ class Memory:
             await db.commit()
 
     async def set_active_trivia(self, channel_id: int, asker_id: int, question: str, answer: str, source_note: str = ""):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute(
                 "INSERT INTO active_trivia (channel_id,asker_id,question,answer,source_note,asked_ts) VALUES (?,?,?,?,?,?) "
                 "ON CONFLICT(channel_id) DO UPDATE SET asker_id=excluded.asker_id, question=excluded.question, "
@@ -1432,7 +1567,7 @@ class Memory:
             await db.commit()
 
     async def get_active_trivia(self, channel_id: int) -> dict | None:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute(
                 "SELECT asker_id,question,answer,source_note,asked_ts FROM active_trivia WHERE channel_id=?",
                 (channel_id,),
@@ -1449,12 +1584,12 @@ class Memory:
         }
 
     async def clear_active_trivia(self, channel_id: int):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute("DELETE FROM active_trivia WHERE channel_id=?", (channel_id,))
             await db.commit()
 
     async def get_trivia_stats(self, user_id: int) -> dict:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute("SELECT correct,wrong FROM trivia WHERE user_id=?", (user_id,)) as cur:
                 row = await cur.fetchone()
         correct = row[0] if row else 0
@@ -1469,7 +1604,7 @@ class Memory:
 
     # ── Roast battles ─────────────────────────────────────────────────────────
     async def start_roast_battle(self, channel_id: int, u1: int, u2: int) -> int:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             cur = await db.execute(
                 "INSERT INTO roast_battles (channel_id,user1_id,user2_id,round,scores,active,ts) VALUES (?,?,?,0,'{}',1,?)",
                 (channel_id,u1,u2,time.time()))
@@ -1477,7 +1612,7 @@ class Memory:
             return cur.lastrowid
 
     async def get_active_roast(self, channel_id: int) -> dict | None:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute(
                 "SELECT id,user1_id,user2_id,round,scores FROM roast_battles WHERE channel_id=? AND active=1", (channel_id,)
             ) as cur:
@@ -1486,17 +1621,17 @@ class Memory:
                 return {"id":row[0],"user1":row[1],"user2":row[2],"round":row[3],"scores":json.loads(row[4])}
 
     async def end_roast_battle(self, battle_id: int):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute("UPDATE roast_battles SET active=0 WHERE id=?", (battle_id,))
             await db.commit()
 
     async def increment_roast_round(self, battle_id: int):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute("UPDATE roast_battles SET round=round+1 WHERE id=?", (battle_id,))
             await db.commit()
 
     async def award_roast_round(self, battle_id: int, winner_user_id: int):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute("SELECT scores FROM roast_battles WHERE id=?", (battle_id,)) as cur:
                 row = await cur.fetchone()
             scores = json.loads(row[0] or "{}") if row else {}
@@ -1509,7 +1644,7 @@ class Memory:
             await db.commit()
 
     async def list_inside_jokes(self, user_id: int, limit: int = 6) -> list[str]:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute(
                 "SELECT joke FROM inside_jokes WHERE user_id=? ORDER BY ts DESC LIMIT ?",
                 (user_id, limit),
@@ -1518,12 +1653,12 @@ class Memory:
 
     # ── Reminders ─────────────────────────────────────────────────────────────
     async def add_reminder(self, user_id: int, channel_id: int, reminder: str, due_ts: float):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute("INSERT INTO reminders (user_id,channel_id,reminder,due_ts) VALUES (?,?,?,?)", (user_id,channel_id,reminder,due_ts))
             await db.commit()
 
     async def get_due_reminders(self) -> list[dict]:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute("SELECT id,user_id,channel_id,reminder FROM reminders WHERE due_ts<=? AND done=0", (time.time(),)) as cur:
                 rows = await cur.fetchall()
             if rows:
@@ -1533,72 +1668,72 @@ class Memory:
 
     # ── Channels ──────────────────────────────────────────────────────────────
     async def track_channel(self, channel_id: int, guild_id: int):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute("INSERT INTO channels (channel_id,guild_id,last_active) VALUES (?,?,?) ON CONFLICT(channel_id) DO UPDATE SET last_active=excluded.last_active", (channel_id,guild_id,time.time()))
             await db.commit()
 
     async def get_active_channels(self) -> list[tuple]:
         cutoff = time.time()-86400*3
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute("SELECT channel_id,guild_id FROM channels WHERE last_active>?", (cutoff,)) as cur:
                 return await cur.fetchall()
 
     # ── Cooldowns ─────────────────────────────────────────────────────────────
     async def can_proactive(self, channel_id: int, cooldown: int = 3600) -> bool:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute("SELECT last_sent FROM proactive_cooldown WHERE channel_id=?", (channel_id,)) as cur:
                 row = await cur.fetchone(); return not row or (time.time()-row[0])>=cooldown
 
     async def set_proactive_sent(self, channel_id: int):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute("INSERT INTO proactive_cooldown (channel_id,last_sent) VALUES (?,?) ON CONFLICT(channel_id) DO UPDATE SET last_sent=excluded.last_sent", (channel_id,time.time()))
             await db.commit()
 
     async def can_lore_drop(self, channel_id: int, cooldown: int = 21600) -> bool:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute("SELECT last_sent FROM lore_cooldown WHERE channel_id=?", (channel_id,)) as cur:
                 row = await cur.fetchone(); return not row or (time.time()-row[0])>=cooldown
 
     async def set_lore_sent(self, channel_id: int):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute("INSERT INTO lore_cooldown (channel_id,last_sent) VALUES (?,?) ON CONFLICT(channel_id) DO UPDATE SET last_sent=excluded.last_sent", (channel_id,time.time()))
             await db.commit()
 
     async def can_starter(self, channel_id: int, cooldown: int = 10800) -> bool:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute("SELECT last_sent FROM starter_cooldown WHERE channel_id=?", (channel_id,)) as cur:
                 row = await cur.fetchone(); return not row or (time.time()-row[0])>=cooldown
 
     async def set_starter_sent(self, channel_id: int):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute("INSERT INTO starter_cooldown (channel_id,last_sent) VALUES (?,?) ON CONFLICT(channel_id) DO UPDATE SET last_sent=excluded.last_sent", (channel_id,time.time()))
             await db.commit()
 
     # ── Romance helpers ───────────────────────────────────────────────────────
     async def get_romance_users(self) -> list[int]:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute("SELECT user_id FROM users WHERE romance_mode=1 AND proactive=1") as cur:
                 return [r[0] for r in await cur.fetchall()]
 
     async def get_user_last_channel(self, user_id: int) -> int | None:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute("SELECT channel_id FROM messages WHERE user_id=? AND (bot_name=? OR bot_name IS NULL) ORDER BY ts DESC LIMIT 1", (user_id,self.bot_name)) as cur:
                 row = await cur.fetchone(); return row[0] if row else None
 
     # ── DM cooldown ───────────────────────────────────────────────────────────
     async def can_dm_user(self, user_id: int, cooldown: int = 7200) -> bool:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute("SELECT last_sent FROM dm_cooldown WHERE user_id=?", (user_id,)) as cur:
                 row = await cur.fetchone(); return not row or (time.time()-row[0])>=cooldown
 
     async def set_dm_sent(self, user_id: int):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute("INSERT INTO dm_cooldown (user_id,last_sent) VALUES (?,?) ON CONFLICT(user_id) DO UPDATE SET last_sent=excluded.last_sent", (user_id,time.time()))
             await db.commit()
 
     async def get_dm_eligible_users(self) -> list[dict]:
         cutoff = time.time()-86400*7
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute("""
                 SELECT u.user_id,u.display_name,u.romance_mode,u.nsfw_mode
                 FROM users u WHERE u.allow_dms=1 AND u.last_seen>?
@@ -1607,9 +1742,48 @@ class Memory:
                 rows = await cur.fetchall()
         return [{"user_id":r[0],"display_name":r[1],"romance_mode":bool(r[2]),"nsfw_mode":bool(r[3])} for r in rows]
 
+    async def get_proactive_candidates(self, *, absent_before: float, limit: int = 20) -> list[dict]:
+        """Return public-channel candidates without coupling them to DM consent."""
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
+            async with db.execute(
+                """SELECT u.user_id,u.display_name,u.affection,u.trust,u.last_active,u.proactive,
+                          latest.channel_id,
+                          COALESCE((
+                              SELECT SUBSTR(public_message.content,1,180)
+                              FROM messages public_message
+                              WHERE public_message.user_id=u.user_id
+                                AND public_message.channel_id=latest.channel_id
+                                AND public_message.role='user'
+                                AND (public_message.bot_name=? OR public_message.bot_name IS NULL)
+                              ORDER BY public_message.ts DESC,public_message.id DESC LIMIT 1
+                          ), '') AS public_context
+                   FROM users u
+                   JOIN messages latest ON latest.id=(
+                       SELECT candidate.id FROM messages candidate
+                       JOIN channels tracked ON tracked.channel_id=candidate.channel_id
+                       WHERE candidate.user_id=u.user_id
+                         AND (candidate.bot_name=? OR candidate.bot_name IS NULL)
+                       ORDER BY candidate.ts DESC,candidate.id DESC LIMIT 1
+                   )
+                   WHERE u.proactive=1 AND u.last_active>0 AND u.last_active<? AND u.message_count>5
+                   ORDER BY (u.affection + u.trust * 0.5) DESC,u.last_active ASC
+                   LIMIT ?""",
+                (self.bot_name, self.bot_name, absent_before, max(1, min(int(limit), 100))),
+            ) as cur:
+                rows = await cur.fetchall()
+        return [
+            {
+                "user_id": row[0], "display_name": row[1], "affection": row[2] or 0,
+                "trust": row[3] or 0, "last_active": row[4] or 0,
+                "proactive": bool(row[5]), "channel_id": row[6],
+                "context": (row[7] or "")[:180],
+            }
+            for row in rows
+        ]
+
     # ── Stats ─────────────────────────────────────────────────────────────────
     async def get_stats(self, user_id: int) -> dict:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute("""
                 SELECT message_count,mood,affection,trust,first_seen,grudge_nick,
                        affection_nick,romance_mode,nsfw_mode,drift_score,slow_burn

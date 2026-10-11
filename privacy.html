@@ -50,7 +50,7 @@
   <div class="container">
     <div class="header">
       <h1>Privacy Policy</h1>
-      <p>Scaramouche Bot &mdash; Last updated: 2025</p>
+      <p>Scaramouche Bot &mdash; Last updated: September 2026</p>
     </div>
 
     <h2>1. Overview</h2>
@@ -64,6 +64,7 @@
       <li><strong>Message Content</strong> — your messages to the Bot, stored as conversation history to enable memory features</li>
       <li><strong>User Preferences</strong> — mode settings such as NSFW mode, romance mode, and proactive messaging toggles</li>
       <li><strong>Channel &amp; Server IDs</strong> — to track which channels are active for proactive messaging</li>
+      <li><strong>Modeled relationship and self-state records</strong> — limited goals, reflections, beliefs, contradictions, and action logs that provide continuity; user-linked records are deleted when that user wipes their memory</li>
     </ul>
 
     <h2>3. How We Use Your Data</h2>
@@ -72,21 +73,25 @@
       <li>Provide conversation memory so the Bot remembers past interactions</li>
       <li>Store your personal preferences and mode settings</li>
       <li>Enable proactive messaging features (if opted in)</li>
+      <li>Maintain rate-limited continuity, self-reflection, and diagnostic health features</li>
     </ul>
-    <p>Your data is never sold, shared with third parties, or used for advertising.</p>
+    <p>Your data is not sold or used for advertising. Content is shared with service providers only as needed to provide requested model, voice, vision, search, weather, hosting, and Discord functionality.</p>
 
     <h2>4. Third-Party Services</h2>
     <p>The Bot uses the following third-party APIs to function. Your messages may be processed by these services:</p>
     <ul>
-      <li><strong>Anthropic (Claude API)</strong> — processes your messages to generate responses. See <a href="https://www.anthropic.com/privacy" target="_blank">Anthropic's Privacy Policy</a>.</li>
+      <li><strong>Groq</strong> — processes relevant message and memory context to generate text responses and occasional selected reflections.</li>
+      <li><strong>xAI</strong> — may process images and their accompanying prompts when vision features are used.</li>
       <li><strong>Fish Audio</strong> — processes text to generate voice responses. See <a href="https://fish.audio/privacy/" target="_blank">Fish Audio's Privacy Policy</a>.</li>
+      <li><strong>Search and weather providers</strong> — receive search terms or locations only when those features are used.</li>
+      <li><strong>Discord and the hosting provider</strong> — transmit and host the Bot, its messages, and its local database.</li>
     </ul>
 
     <h2>5. Data Storage</h2>
-    <p>Data is stored in a local SQLite database on the server hosting the Bot. It is not stored in any external database or cloud storage service beyond the hosting platform (Railway).</p>
+    <p>Persistent data is stored in SQLite on the Bot's hosting environment. Providers may temporarily process content under their own policies. Operational backups may contain the same encrypted-at-rest protections offered by the hosting environment.</p>
 
     <h2>6. Data Retention</h2>
-    <p>Conversation history is retained indefinitely to enable memory features. You can delete your own data at any time by using the <strong>!reset</strong> command, which wipes your conversation history from the database.</p>
+    <p>Conversation and continuity records are retained until removed. <strong>!forget &lt;phrase&gt;</strong> removes matching text from future local memory and prompt context. <strong>!reset</strong> removes conversation history, user memories, preferences, relationship state, and self-model records linked to your Discord user ID. Provider-side retention is governed by each provider's policy and cannot be erased by a local Discord command.</p>
 
     <h2>7. Your Rights</h2>
     <p>You have the right to:</p>
@@ -107,7 +112,7 @@
     <p>For privacy concerns or data removal requests, contact the Bot owner through the Discord server where the Bot is hosted.</p>
 
     <div class="footer">
-      &copy; 2025 Scaramouche Bot &mdash; Fan Project &mdash; Not affiliated with HoYoverse
+      &copy; 2026 Scaramouche Bot &mdash; Fan Project &mdash; Not affiliated with HoYoverse
     </div>
   </div>
 </body>
