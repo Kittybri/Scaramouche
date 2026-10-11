@@ -123,7 +123,7 @@ def _backdrop_cached(world, size, path_string, _signature):
     rng = random.Random(42 if world == "horror" else 29)
     for i in range(45):
         x = rng.randrange(w)
-        d.line((x, rng.randrange(100, h), x+rng.randrange(-70, 70), h),
+        d.line((x, rng.randrange(min(100, h - 1), h), x+rng.randrange(-70, 70), h),
                fill=(12, 10, 22, 85), width=rng.randrange(2, 10))
     for x in range(-30, w, 125):
         d.polygon([(x, h-135), (x+60, h-310), (x+110, h-135)],
