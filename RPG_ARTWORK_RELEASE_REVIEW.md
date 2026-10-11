@@ -20,8 +20,6 @@ remain unchanged. Existing embeds and buttons are sent even when artwork fails.
 
 ## Art pack (separate from the code PR)
 
-## Art pack (separate from the code PR)
-
 The previous flat-folder art ZIP is an **unapproved draft**, not a deployable
 horror art pack. Only curated, reviewed artwork belongs in these paths:
 
