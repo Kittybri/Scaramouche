@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+from functools import lru_cache
 import logging
 import math
 import os
@@ -71,6 +72,7 @@ def portrait_path(boss, bot_name, art_dir=None):
     return ((Path(art_dir) if art_dir is not None else ART_DIR) / "portraits" / filename) if filename else None
 
 
+@lru_cache(maxsize=8)
 def _backdrop(world, size=(1100, 660), art_dir=None):
     world = _world(world)
     w, h = size
@@ -193,7 +195,7 @@ def render_scene(*, kind="encounter", world="horror", boss=None, bot_name="Wande
     rank = int((boss or {}).get("rank", 0))
     tint = SIGNATURE.get(rank, ("WORLD", (171, 118, 195)))[1]
     w, h = (1100, 660)
-    image = _backdrop(world, (w, h), art_dir)
+    image = _backdrop(world, (w, h), art_dir).copy()
     d = ImageDraw.Draw(image, "RGBA")
     d.rounded_rectangle((36, 88, 465, 532), radius=16, fill=(9, 15, 30, 220),
                         outline=(*tint, 230), width=3)
@@ -210,7 +212,7 @@ def render_scene(*, kind="encounter", world="horror", boss=None, bot_name="Wande
                 alpha = int(90 * (1.0-i/35))
                 d.arc((65+i, 110+i, 438-i, 507-i), 100, 320,
                       fill=(*tint, alpha), width=4)
-            _text(d,(93,263),"PORTRAIT PENDING",20,(209,190,190))
+            _text(d,(93,263),"SHADOWED ADVERSARY",20,(209,190,190))
     _text(d,(54,36),"HARBINGER CHRONICLES",34,(248,221,151),True)
     _text(d,(505,112),("CORRUPTED HORROR" if world=="horror" else "HARBINGER TAKEOVER"),
           20,(*tint,),True)
@@ -251,7 +253,7 @@ def render_scene(*, kind="encounter", world="horror", boss=None, bot_name="Wande
 
 
 def render_war_table(*, world="horror", defeated=(), total=0, bot_name="Wanderer", art_dir=None):
-    image=_backdrop(world, (1100,660), art_dir)
+    image=_backdrop(world, (1100,660), art_dir).copy()
     d=ImageDraw.Draw(image,"RGBA")
     d.rounded_rectangle((36,82,1064,592),radius=20,fill=(15,15,23,212),
                         outline=(201,168,105,230),width=4)
