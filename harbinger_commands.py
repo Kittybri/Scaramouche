@@ -9,6 +9,7 @@ import discord
 from awareness_features import classify_safety
 from restoration_store import StaleCampaign
 from restored_lifecycle import WORK
+from rpg_visuals import illustrated_send
 from harbinger_lore import (
     HARBINGERS_HORROR, HARBINGERS_TAKEOVER, FIVE_STAR_CHARS,
     FOUR_STAR_CHARS, MONSTERS, FORBIDDEN_ROLL,
@@ -257,7 +258,23 @@ class HarbingerController:
         view=None if s=='finished' else QuestView(self,uid,guild,channel.id,revision,state)
         await self.guard(uid)
         await self.store.valid(uid,guild,revision)
-        await channel.send(embed=embed,view=view,allowed_mentions=discord.AllowedMentions.none())
+        visual_stage = (
+            "victory" if s == "finished" and state.get("victory")
+            else "defeat" if s == "finished"
+            else "world" if s in ("world", "origin", "element")
+            else "encounter"
+        )
+        await illustrated_send(
+            channel, embed, view=view, allowed_mentions=discord.AllowedMentions.none(),
+            kind=visual_stage, bot_name="Scaramouche",
+            world=state.get("world_type") or "horror",
+            boss=self.boss(state) if s not in ("world", "origin", "element") else None,
+            round_num=state.get("current_round", 0),
+            points=state.get("boss_points", 0),
+            total=state.get("total_points", 0),
+            defeated=state.get("bosses_beaten", ()),
+            origin=state.get("char_type", ""), element=state.get("element", ""),
+        )
 
     async def command(self, ctx, action):
         uid,guild=ctx.author.id,getattr(ctx.guild,'id',0)
@@ -278,6 +295,13 @@ class HarbingerController:
                     await ctx.send('Use !rpg1 to begin your campaign here.'); return
                 _,s=current
                 await ctx.send(f"Harbingers defeated: {len(s.get('bosses_beaten',[]))}/11 • Total points: {s.get('total_points',0)} • Stage: {stage(s)}")
+                await illustrated_send(
+                    ctx.channel,
+                    discord.Embed(title="Harbinger War Table", color=0x8B0000),
+                    board=True, bot_name="Scaramouche",
+                    world=s.get("world_type") or "horror",
+                    defeated=s.get("bosses_beaten", ()), total=s.get("total_points", 0),
+                )
                 return
             if action=='reset':
                 if not current:
