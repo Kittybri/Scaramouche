@@ -117,6 +117,7 @@
     "rpdepth",
     "say",
     "scaradaily",
+    "scaradailycard",
     "scarahelp",
     "scarahistory",
     "scaramouchedaily",
@@ -187,9 +188,7 @@
     "write"
   ],
   "slash": [
-    "dailycard",
     "google",
-    "tarot",
     "tarothistory",
     "tarotsettings"
   ]

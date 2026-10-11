@@ -1,4 +1,6 @@
 """Audience attribution for optional two-bot banter (no Discord side effects)."""
+from __future__ import annotations
+
 import re
 from dataclasses import dataclass, field
 
@@ -121,6 +123,19 @@ async def resolve_duo_reply_anchor(channel, source_message_id: int | None, fallb
     if partner_bot_id and int(getattr(getattr(original, "author", None), "id", 0) or 0) != int(partner_bot_id):
         return None
     return original
+
+
+async def resolve_autoplay_anchor(channel, session, bot_name, partner_name, partner_bot_id, target_message, memory):
+    if session.get("mode") in {"interview", "welcome_interview"}:
+        return target_message
+    source_id = await memory.get_duo_reply_anchor(channel.id, bot_name)
+    if source_id:
+        return await resolve_duo_reply_anchor(
+            channel, source_id, partner_bot_id=partner_bot_id,
+        )
+    if (session.get("last_speaker") or "").lower() == partner_name.lower():
+        return None
+    return target_message
 
 
 def romance_ping_chosen(draw: float) -> bool:

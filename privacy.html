@@ -50,67 +50,44 @@
   <div class="container">
     <div class="header">
       <h1>Privacy Policy</h1>
-      <p>Scaramouche Bot &mdash; Last updated: September 2026</p>
+      <p>Scaramouche Bot &mdash; Last updated: October 2026</p>
     </div>
 
     <h2>1. Overview</h2>
     <p>This Privacy Policy explains what data Scaramouche Bot ("the Bot") collects, how it is used, and how it is stored. We take your privacy seriously and collect only what is necessary for the Bot to function.</p>
 
-    <h2>2. Data We Collect</h2>
-    <p>The Bot collects and stores the following data when you interact with it:</p>
+
+    <h2>2. Information We Process</h2>
+    <p>Scaramouche may process your Discord user ID, display name, channel and server IDs, messages, commands and user-submitted attachments. Persistent features may store conversation memory, preferences, game and achievement state, user-linked relationship and character continuity, reminders, and bounded operational records. Some optional interactions involve shared world and duo data with Wanderer.</p>
+    <p>When enabled or requested, optional features may process voice audio and transcripts, images, voluntarily enrolled face-recognition profiles, and home/device or computer integration information. You control whether to use optional features and should not send passwords or unrelated private information.</p>
+
+    <h2>3. How We Use and Share Information</h2>
+    <p>We use information to respond in Discord, operate the features you request, maintain conversational continuity, respect preferences, prevent abuse, and support reliability. Relevant conversation text, images or audio-derived information may be sent to service providers needed for the feature. These can include Discord, Groq (text generation and/or speech transcription), Fish Audio (speech synthesis), optional vision or search services, and the bot's hosting services. Provider processing and retention follow their own terms; the bot does not sell data or use it for targeted advertising.</p>
+    <p>Information you send in public channels, and responses you request there, may be visible to other server members. Public channel conversations are not a private inbox.</p>
+
+    <h2>4. Google Connected Accounts (Optional)</h2>
+    <p>If you explicitly connect a Google account, Scaramouche can access the verified account identity, Google Calendar events, and Google Tasks required for requested features. This feature requests <code>openid</code>, <code>email</code>, <code>https://www.googleapis.com/auth/calendar.events</code> and <code>https://www.googleapis.com/auth/tasks</code>. The latter two permissions permit writes; they are not read-only. This connection does not request Gmail or Google Docs/Drive access.</p>
+    <p>Scaramouche can list requested Calendar events and tasks, and propose supported creations and updates. Writes require your separate confirmation. An encrypted Google credential record is linked to your Discord ID in a shared database. Scaramouche and Wanderer have independent access grants; one bot being allowed does not automatically allow the other.</p>
+    <p>Relevant Calendar or Tasks details may be included in a request to the text-generation provider to answer you. Google credentials are not intended for model prompts. Google information is used only for requested, prominent user-facing features, not for advertising, resale, credit decisions or general-purpose AI model training. Our use of Google Workspace data will adhere to the <a href="https://developers.google.com/workspace/workspace-api-user-data-developer-policy">Google Workspace API User Data and Developer Policy, including its Limited Use requirements</a>. Before public launch, the operator must confirm that third-party provider arrangements support these commitments.</p>
+
+    <h2>5. Storage, Security and Retention</h2>
+    <p>Persistent bot records are held in local databases on the hosting environment. Google access and refresh tokens are stored using authenticated encryption with a separate master key. Google linking uses short-lived OAuth sessions, an HTTPS callback and a second in-Discord confirmation. No service can guarantee absolute security.</p>
+    <p>Conversation, user preferences and continuity records may remain until removed using the bot's privacy controls. Google connection records remain until disconnected, deleted or otherwise invalidated; temporary sessions expire and are cleaned up. Hosting backups, if any, may follow separate retention schedules that the operator must document before public launch. Provider-side retention is controlled by each provider's policies.</p>
+
+    <h2>6. Your Controls and Deletion</h2>
     <ul>
-      <li><strong>Discord User ID</strong> — to identify you across conversations</li>
-      <li><strong>Discord Username &amp; Display Name</strong> — to address you correctly</li>
-      <li><strong>Message Content</strong> — your messages to the Bot, stored as conversation history to enable memory features</li>
-      <li><strong>User Preferences</strong> — mode settings such as Unrestricted mode, romance mode, and proactive messaging toggles</li>
-      <li><strong>Channel &amp; Server IDs</strong> — to track which channels are active for proactive messaging</li>
-      <li><strong>Modeled relationship and self-state records</strong> — limited goals, reflections, beliefs, contradictions, and action logs that provide continuity; user-linked records are deleted when that user wipes their memory</li>
+      <li><strong>!forget &lt;phrase&gt;</strong> requests deletion of matching information from supported memory stores.</li>
+      <li><strong>!reset</strong> (alias <strong>!wipe</strong>) starts deletion of user-linked bot data through the bot's privacy reset process.</li>
+      <li><strong>!google permissions</strong> controls each bot's Google access; <strong>!google disconnect</strong> deletes the local connection and both bot grants, and attempts Google token revocation.</li>
+      <li>Use the available in-bot settings to disable optional proactive messages, voice interaction, face enrollment and related features.</li>
     </ul>
+    <p>If remote Google revocation cannot be verified, also remove the app from your <a href="https://myaccount.google.com/connections">Google Account connections</a>. Deletion in Discord does not remove already delivered public messages, Google events/tasks created at your request, or independent third-party copies. To request assistance, contact the bot operator in the community where you use the bot.</p>
 
-    <h2>3. How We Use Your Data</h2>
-    <p>Collected data is used exclusively to:</p>
-    <ul>
-      <li>Provide conversation memory so the Bot remembers past interactions</li>
-      <li>Store your personal preferences and mode settings</li>
-      <li>Enable proactive messaging features (if opted in)</li>
-      <li>Maintain rate-limited continuity, self-reflection, and diagnostic health features</li>
-    </ul>
-    <p>Your data is not sold or used for advertising. Content is shared with service providers only as needed to provide requested model, voice, vision, search, weather, hosting, and Discord functionality.</p>
+    <h2>7. Children's Privacy</h2>
+    <p>The bot is not intended for users under 13 or the higher minimum age required by Discord or applicable law.</p>
 
-    <h2>4. Third-Party Services</h2>
-    <p>The Bot uses the following third-party APIs to function. Your messages may be processed by these services:</p>
-    <ul>
-      <li><strong>Groq</strong> — processes relevant message and memory context to generate text responses and occasional selected reflections.</li>
-      <li><strong>xAI</strong> — may process images and their accompanying prompts when vision features are used.</li>
-      <li><strong>Fish Audio</strong> — processes text to generate voice responses. See <a href="https://fish.audio/privacy/" target="_blank">Fish Audio's Privacy Policy</a>.</li>
-      <li><strong>Search and weather providers</strong> — receive search terms or locations only when those features are used.</li>
-      <li><strong>Discord and the hosting provider</strong> — transmit and host the Bot, its messages, and its local database.</li>
-    </ul>
-
-    <h2>5. Data Storage</h2>
-    <p>Persistent data is stored in SQLite on the Bot's hosting environment. Providers may temporarily process content under their own policies. Operational backups may contain the same encrypted-at-rest protections offered by the hosting environment.</p>
-
-    <h2>6. Data Retention</h2>
-    <p>Conversation and continuity records are retained until removed. <strong>!forget &lt;phrase&gt;</strong> removes matching text from future local memory and prompt context. <strong>!reset</strong> removes conversation history, user memories, preferences, relationship state, and self-model records linked to your Discord user ID. Provider-side retention is governed by each provider's policy and cannot be erased by a local Discord command.</p>
-
-    <h2>7. Your Rights</h2>
-    <p>You have the right to:</p>
-    <ul>
-      <li>Delete your conversation history at any time using <strong>!reset</strong></li>
-      <li>Opt out of proactive messaging using <strong>!proactive off</strong></li>
-      <li>Opt out of voluntary DMs using <strong>!dms off</strong></li>
-      <li>Request complete removal of your data by contacting the Bot owner</li>
-    </ul>
-
-    <h2>8. Children's Privacy</h2>
-    <p>The Bot is not intended for users under the age of 13. We do not knowingly collect data from children under 13. If you believe a child has used the Bot, please contact the Bot owner for data removal.</p>
-
-    <h2>9. Changes to This Policy</h2>
-    <p>This Privacy Policy may be updated at any time. Continued use of the Bot after changes constitutes acceptance of the updated policy.</p>
-
-    <h2>10. Contact</h2>
-    <p>For privacy concerns or data removal requests, contact the Bot owner through the Discord server where the Bot is hosted.</p>
-
+    <h2>8. Policy Updates and Contact</h2>
+    <p>Material policy changes should be communicated through the bot's community where feasible. A policy update never grants new Google permissions by itself. For privacy concerns, support or deletion help, contact the bot owner through the Discord community where you use Scaramouche. A stable public support contact must be confirmed before Google production publication.</p>
     <div class="footer">
       &copy; 2026 Scaramouche Bot &mdash; Fan Project &mdash; Not affiliated with HoYoverse
     </div>

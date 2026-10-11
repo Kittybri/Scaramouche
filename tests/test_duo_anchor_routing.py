@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 import discord
 from partner_banter_routing import romance_ping_chosen
 from memory import Memory
-from partner_banter_routing import coherent_partner_reply, resolve_duo_reply_anchor
+from partner_banter_routing import coherent_partner_reply, resolve_autoplay_anchor, resolve_duo_reply_anchor
 
 
 def test_false_speaker_attribution_blocks_text_and_real_mention_but_not_romance_teasing():
@@ -51,6 +51,36 @@ def test_deleted_anchor_fails_closed_and_legacy_fallback_remains_available():
         response = NS(status=404, reason="Not Found")
         channel.fetch_message.side_effect = discord.NotFound(response, "Message not found")
         assert await resolve_duo_reply_anchor(channel, 101, old) is None
+    asyncio.run(run())
+
+
+def test_autoplay_requires_the_saved_partner_message_or_initial_human_handoff():
+    async def run():
+        source = NS(id=101, author=NS(id=999))
+        participant = NS(id=77, author=NS(id=77))
+        channel = NS(id=20, fetch_message=AsyncMock(return_value=source))
+        memory = NS(get_duo_reply_anchor=AsyncMock(return_value=101))
+        session = {"mode": "trial", "last_speaker": "wanderer"}
+        assert await resolve_autoplay_anchor(
+            channel, session, "scaramouche", "wanderer", 999, participant, memory,
+        ) is source
+        channel.fetch_message.assert_awaited_once_with(101)
+
+        memory.get_duo_reply_anchor.return_value = None
+        channel.fetch_message.reset_mock()
+        assert await resolve_autoplay_anchor(
+            channel, session, "scaramouche", "wanderer", 999, participant, memory,
+        ) is None
+        channel.fetch_message.assert_not_awaited()
+
+        session["last_speaker"] = ""
+        assert await resolve_autoplay_anchor(
+            channel, session, "scaramouche", "wanderer", 999, participant, memory,
+        ) is participant
+        session["mode"] = "interview"
+        assert await resolve_autoplay_anchor(
+            channel, session, "scaramouche", "wanderer", 999, participant, memory,
+        ) is participant
     asyncio.run(run())
 
 

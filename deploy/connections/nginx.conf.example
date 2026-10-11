@@ -18,5 +18,17 @@ server {
         proxy_connect_timeout 5s;
         proxy_read_timeout 30s;
     }
+    # Public pages for Google app verification: copy static files from
+    # deploy/connections/public to /var/www/bot-connections before enabling.
+    # Keep all OAuth start/callback URLs unlogged (including CDN/WAF layers).
+    location = / {
+        root /var/www/bot-connections;
+        try_files /index.html =404;
+    }
+    location = /privacy {
+        alias /var/www/bot-connections/privacy.html;
+        default_type text/html;
+    }
+
     location / { return 404; }
 }

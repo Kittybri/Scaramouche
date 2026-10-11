@@ -33,7 +33,7 @@ from character_bits import (
     is_serious_or_utility, reverse_turing_hint,
     selective_hearing_hint, significant_weather, time_drift_prompt,
 )
-from partner_banter_routing import jealousy_context, coherent_partner_reply, contextual_romance_tag, TurnEnvelope, authorized_ping_ids, resolve_duo_reply_anchor, romance_ping_chosen, authoritative_turn_context
+from partner_banter_routing import jealousy_context, coherent_partner_reply, contextual_romance_tag, TurnEnvelope, authorized_ping_ids, resolve_autoplay_anchor, romance_ping_chosen, authoritative_turn_context
 from interaction_policy import (
     CURRENT, Outcome, classify as classify_interaction, current_or_classify,
     authoritative_prompt, optional_allowed, optional_command_blocked, credential_disclosure,
@@ -4425,37 +4425,23 @@ async def _duo_autoplay_loop():
                 if not channel:
                     continue
                 target_message = None
-                partner_message = None
                 interview_mode = session.get("mode") in {"interview", "welcome_interview"}
                 participant_id = int(session.get("initiator_user_id") or 0)
                 async for candidate in channel.history(limit=8):
                     if candidate.author.bot:
-                        # An actual partner turn is the reply anchor, not
-                        # the later-discovered human context for generation.
-                        if (
-                            not interview_mode and PARTNER_BOT_ID
-                            and candidate.author.id == PARTNER_BOT_ID
-                            and partner_message is None
-                        ):
-                            partner_message = candidate
                         continue
-                    if interview_mode and candidate.author.id != participant_id:
+                    if participant_id and candidate.author.id != participant_id:
                         continue
                     target_message = candidate
                     break
                 if not target_message:
                     continue
-                stored_source_id = (
-                    await mem.get_duo_reply_anchor(channel.id, BOT_NAME)
-                    if not interview_mode else None
+                anchor = await resolve_autoplay_anchor(
+                    channel, session, BOT_NAME, PARTNER_NAME,
+                    PARTNER_BOT_ID or 0, target_message, mem,
                 )
-                partner_message = await resolve_duo_reply_anchor(
-                    channel, stored_source_id,
-                    partner_message if not interview_mode else None,
-                    partner_bot_id=PARTNER_BOT_ID or 0,
-                )
-                if stored_source_id and partner_message is None:
-                    continue  # Deleted/forbidden/incorrect source: never mis-thread.
+                if anchor is None:
+                    continue
                 await mem.upsert_user(target_message.author.id, target_message.author.name, target_message.author.display_name)
                 user = await mem.get_user(target_message.author.id)
                 autoplay_prompt = _duo_autoplay_prompt(session)
@@ -4476,7 +4462,6 @@ async def _duo_autoplay_loop():
                     continue
                 # A Discord reply renders the correct conversation ancestry.
                 # For interview sessions, the human participant is the anchor.
-                anchor = partner_message or target_message
                 sent_message = await anchor.reply(
                     reply, mention_author=False,
                     allowed_mentions=discord.AllowedMentions.none(),

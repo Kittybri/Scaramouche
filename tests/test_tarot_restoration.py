@@ -5,7 +5,7 @@ import json
 import random
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, call
 import discord
 from discord.ext import commands
 import pytest
@@ -44,20 +44,38 @@ def controller(tmp_path, name="Scaramouche"):
 
 @pytest.mark.parametrize("name", ["Scaramouche", "Wanderer"])
 @run
-async def test_registration_keeps_existing_names_and_sync_is_non_destructive(tmp_path, name):
+async def test_registration_keeps_prefix_and_removes_only_requested_slash_commands(tmp_path, name):
     c = controller(tmp_path, name)
     @c.bot.command(name="unrelated")
     async def unrelated(ctx): pass
     assert c.bot.get_command("unrelated")
-    for n in ["tarot", "dailycard", "tarothistory", "tarotsettings"]:
+    assert c.bot.tree.get_command("tarot") is None
+    assert c.bot.tree.get_command("dailycard") is None
+    for n in ("tarothistory", "tarotsettings"):
         assert c.bot.tree.get_command(n)
     assert c.bot.get_command("scaratarot" if name == "Scaramouche" else "tarot")
     assert c.bot.get_command("scarat" if name == "Scaramouche" else "cards")
+    if name == "Scaramouche":
+        assert c.bot.get_command("scaradailycard") is c.bot.get_command("scaradaily")
+    else:
+        assert c.bot.get_command("dailycard")
+    c.bot.http.get_global_commands = AsyncMock(return_value=[
+        {"name": "tarot", "id": "101", "type": 1},
+        {"name": "dailycard", "id": "102", "type": 1},
+        {"name": "tarothistory", "id": "103", "type": 1},
+        {"name": "unrelated", "id": "104", "type": 1},
+        {"name": "tarot", "id": "105", "type": 2},
+    ])
+    c.bot.http.delete_global_command = AsyncMock()
     c.bot.http.upsert_global_command = AsyncMock()
     c.bot.tree.sync = AsyncMock(side_effect=AssertionError("bulk replacement prohibited"))
     await c.sync_commands()
     await c.sync_commands()
-    assert c.bot.http.upsert_global_command.await_count == 4
+    c.bot.http.get_global_commands.assert_awaited_once_with(123)
+    assert c.bot.http.delete_global_command.await_args_list == [
+        call(123, 101), call(123, 102)
+    ]
+    assert c.bot.http.upsert_global_command.await_count == 2
     c.bot.tree.sync.assert_not_awaited()
     await c.bot.close()
 
@@ -159,7 +177,8 @@ async def test_private_prefix_dm_failure_does_not_leak_question(tmp_path, deck):
     ctx = SimpleNamespace(author=author, guild=object(), send=AsyncMock())
     await c.prefix(ctx, "reading", "private synthetic question")
     assert "private synthetic question" not in str(ctx.send.call_args_list)
-    assert "/tarot" in ctx.send.call_args.args[0]
+    assert "/tarotsettings" in ctx.send.call_args.args[0]
+    assert "/dailycard" not in ctx.send.call_args.args[0]
     await c.bot.close()
 
 
@@ -215,7 +234,11 @@ def test_actual_bot_wiring_help_privacy_and_no_bulk_sync_regression():
     tree = ast.parse(source)
     help_fn = next(n for n in tree.body if isinstance(n,ast.AsyncFunctionDef) and n.name=="help_cmd")
     assert "TAROT_HELP" in ast.unparse(help_fn)
-    assert all("/"+name in TAROT_HELP for name in ["tarot","dailycard","tarothistory","tarotsettings"])
+    assert all("/"+name in TAROT_HELP for name in ["tarothistory", "tarotsettings"])
+    assert "!scaradailycard" in TAROT_HELP
+    assert "!dailycard" in TAROT_HELP
+    assert "`/tarot`" not in TAROT_HELP
+    assert "`/dailycard`" not in TAROT_HELP
 
 
 def test_import_time_construction_does_not_require_running_event_loop(tmp_path, monkeypatch):
@@ -225,3 +248,42 @@ def test_import_time_construction_does_not_require_running_event_loop(tmp_path, 
     monkeypatch.setattr(asyncio, "Semaphore", forbidden)
     store = ts.TarotStore(tmp_path / "import.db")
     TarotController(None, "Scaramouche", None, "fake-model", tmp_path, None, None, store=store)
+
+
+@pytest.mark.parametrize("bot_name", ["Scaramouche", "Wanderer"])
+@run
+async def test_prefix_reading_and_daily_are_normal_revisitable_messages(tmp_path, bot_name):
+    c = controller(tmp_path, bot_name)
+    channel_message = SimpleNamespace(id=12345)
+    channel_send = AsyncMock(return_value=channel_message)
+    ctx = SimpleNamespace(
+        guild=object(), author=SimpleNamespace(id=1, send=AsyncMock()),
+        send=channel_send,
+    )
+    c.payload = AsyncMock(return_value=({"content": "Public tarot table", "view": SimpleNamespace()}, False))
+    await c.prefix(ctx, "reading", "Will I get a cat?")
+    assert channel_send.await_args.kwargs["content"] == "Public tarot table"
+    assert "ephemeral" not in channel_send.await_args.kwargs
+    ctx.author.send.assert_not_awaited()
+    assert c.payload.await_args.args[1] == "reading"
+    channel_send.reset_mock()
+    c.payload = AsyncMock(return_value=({"content": "Daily tarot card", "file": "synthetic"}, False))
+    await c.prefix(ctx, "daily")
+    assert channel_send.await_args.kwargs["content"] == "Daily tarot card"
+    assert "ephemeral" not in channel_send.await_args.kwargs
+    ctx.author.send.assert_not_awaited()
+    await c.bot.close()
+
+
+@run
+async def test_private_prefix_uses_actual_dm_not_ephemeral_guild_message(tmp_path):
+    c = controller(tmp_path, "Scaramouche")
+    author = SimpleNamespace(id=1, send=AsyncMock(return_value=SimpleNamespace(id=22)))
+    ctx = SimpleNamespace(guild=object(), author=author, send=AsyncMock())
+    c.payload = AsyncMock(return_value=({"content": "Private reading"}, True))
+    await c.prefix(ctx, "reading", "private question")
+    assert author.send.await_args.kwargs["content"] == "Private reading"
+    assert "ephemeral" not in author.send.await_args.kwargs
+    assert ctx.send.await_count == 1
+    assert "privately" in ctx.send.await_args.args[0]
+    await c.bot.close()

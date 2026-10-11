@@ -275,8 +275,8 @@ def test_autoplay_bot_to_bot_uses_discord_reply_not_standalone_channel_send():
     start = source.index("async def _duo_autoplay_loop():")
     end = source.index("async def ", start + 12)
     body = source[start:end]
-    assert "partner_message = candidate" in body
-    assert "anchor = partner_message or target_message" in body
+    assert "resolve_autoplay_anchor(" in body
+    assert "partner_message = candidate" not in body
     assert "await anchor.reply(" in body
     assert "mention_author=False" in body
     assert "await channel.send(reply)" not in body

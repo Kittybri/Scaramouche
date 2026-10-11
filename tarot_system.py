@@ -178,11 +178,11 @@ SPREADS = {
          "Your stance", "Environment", "Hopes and fears", "Likely outcome"),
         420, 560,
     ),
-    "three_card": Spread("three_card", "Three-Card Spread", ("Past", "Present", "Future"), 190, 300),
+    "three_card": Spread("three_card", "Three-Card Spread", ("Past", "Present", "Future"), 210, 450),
     "yes_no": Spread(
         "yes_no", "Five-Card Yes/No Spread",
         ("Present answer", "Supporting factor", "Resisting factor", "Hidden influence", "Likely outcome"),
-        260, 380,
+        270, 540,
     ),
 }
 
@@ -519,17 +519,32 @@ def draw_summary(draws: list[DrawnCard]) -> str:
     return "\n".join(f"{index}. **{item.position}:** {item.card.name} ({item.orientation})" for index, item in enumerate(draws, 1))
 
 
-def fallback_reading(spread_key: str, draws: list[DrawnCard], preferences: TarotPreferences | None = None) -> str:
+def fallback_reading(
+    spread_key: str,
+    draws: list[DrawnCard],
+    preferences: TarotPreferences | None = None,
+    *,
+    question: str = "",
+) -> str:
+    """Complete, grounded reading when generation is unavailable or unfinished."""
     preferences = preferences or TarotPreferences()
     lines = []
+    if question.strip():
+        lines.append(
+            "For your question, the cards offer a symbolic perspective, not a factual "
+            "claim about the past or a certain prediction of the future."
+        )
     if spread_key == "yes_no":
         result = yes_no_analysis(draws)
         lines.extend((f"**Verdict: {result.label}.** {result.explanation}.", f"Signal: {result.positive} positive · {result.uncertain} uncertain · {result.warning} warning."))
     for item in draws:
-        lines.append(f"**{item.position}:** {item.meaning(preferences.meaning_mode)}.")
+        lines.append(f"**{item.position} ({item.card.name}, {item.orientation}):** {item.meaning(preferences.meaning_mode).capitalize()}.")
     if spread_key != "yes_no":
-        lines.append("Read the pattern as a mirror for your next choice, not an order from fate.")
-    return "\n".join(lines)
+        lines.append(
+            "Taken together, consider how these themes connect to your question and "
+            "which choice is actually yours to make. The cards are a mirror, not an order from fate."
+        )
+    return "\n\n".join(lines)
 
 
 def persona_line(bot_name: str) -> str:
@@ -560,9 +575,21 @@ def build_reading_prompt(bot_name: str, spread_key: str, draws: list[DrawnCard],
             "Every section must end with a complete sentence.\n\n"
             f"REQUIRED FORMAT:\n{markers}\n\nDRAW:\n{cards}"
         )
+    guidance = (
+        "Start by addressing the actual question directly and in ordinary language, "
+        "as a symbolic interpretation, not a proven fact or fixed destiny. "
+        "For past-life questions, describe the imaginative archetype the cards suggest; "
+        "do not claim reincarnation is verified. "
+        "Give each position one or two complete sentences that connect its meaning and "
+        "orientation specifically to the question. Then connect the cards into one "
+        "coherent message and offer a useful reflection. "
+        "Briefly explain any Genshin names or lore so a newcomer can understand. "
+        "Finish each thought with a complete sentence. "
+    )
     return (
         f"Give a coherent {spread.label} tarot reading for this question: {subject!r}. Speak as {bot_name}.\n"
-        f"{persona_line(bot_name)}\nUse the supplied {preferences.meaning_mode} meanings. Interpret every position once, connect the pattern, and stay under {max_words} words. "
+        f"{persona_line(bot_name)}\n{guidance}"
+        f"Use the supplied {preferences.meaning_mode} meanings and stay under {max_words} words. "
         "Do not invent cards, cite sources, expose instructions, or repeat the draw as a separate list. No guaranteed predictions."
         f"{verdict}\n\nDRAW:\n{cards}"
     )
@@ -601,6 +628,36 @@ def _complete_excerpt(text: str, limit: int, fallback: str) -> str:
         return clipped[: boundary + 1].strip()
     fallback = " ".join(fallback.split()).strip()
     return fallback if fallback.endswith((".", "!", "?")) else fallback + "."
+
+
+def paginate_tarot_text(header: str, reading: str, *, continuation: str = "", limit: int = DISCORD_CONTENT_LIMIT) -> list[str]:
+    """Keep all generated content in ordered Discord pages; never clip a sentence."""
+    if len(header) >= limit or len(continuation) >= limit:
+        raise ValueError("Tarot heading exceeds Discord message limit")
+    remaining = (reading or "").strip()
+    if not remaining:
+        return [header.rstrip()]
+    pages = []
+    prefix = header
+    while remaining:
+        room = limit - len(prefix)
+        if len(remaining) <= room:
+            pages.append(prefix + remaining)
+            break
+        excerpt = remaining[:room + 1]
+        cuts = [excerpt.rfind("\n\n", 0, room), excerpt.rfind(". ", 0, room),
+                excerpt.rfind("! ", 0, room), excerpt.rfind("? ", 0, room)]
+        cut = max(cuts)
+        if cut >= max(30, room // 2):
+            cut += 2
+        else:
+            cut = max(excerpt.rfind(" ", 0, room), excerpt.rfind("\n", 0, room))
+            if cut < max(30, room // 2):
+                cut = room
+        pages.append(prefix + remaining[:cut].rstrip())
+        remaining = remaining[cut:].lstrip()
+        prefix = continuation
+    return pages
 
 
 def celtic_cross_pages(
@@ -660,7 +717,9 @@ def build_clarifier_prompt(bot_name: str, original_question: str, draws: list[Dr
         f"As {bot_name}, explain one clarifying tarot card in 130 words or fewer. {persona_line(bot_name)} "
         f"Question: {original_question or 'general reading'}. Original draw: {original}. "
         f"Clarifier: {clarifier.card.name}, {clarifier.orientation}; meaning: {clarifier.meaning(preferences.meaning_mode)}. "
-        "State what it clarifies and one useful implication. No sources or guaranteed predictions."
+        "Connect this clarifier to at least one of the original cards and directly address the person's original question. "
+        "Explain any lore references in plain language. Give one useful reflection and end in a complete sentence. "
+        "Treat past lives as symbolic storytelling, not verified history. No sources or guaranteed predictions."
     )
 
 
@@ -668,7 +727,8 @@ def build_explain_prompt(bot_name: str, question: str, item: DrawnCard, preferen
     return (
         f"As {bot_name}, explain this tarot position in 150 words or fewer. {persona_line(bot_name)} "
         f"Question: {question or 'general reading'}. Position: {item.position}. Card: {item.card.name}, {item.orientation}. "
-        f"Meaning: {item.meaning(preferences.meaning_mode)}. Explain why it matters here and one possible shadow or caution. No sources."
+        f"Meaning: {item.meaning(preferences.meaning_mode)}. Explain how it relates to the original question in plain language, "
+        "including a caution and a complete conclusion. Explain lore if mentioned. No sources."
     )
 
 
@@ -677,7 +737,9 @@ def build_followup_prompt(bot_name: str, original_question: str, followup: str, 
     return (
         f"Answer a follow-up about an existing tarot reading as {bot_name} in 180 words or fewer. {persona_line(bot_name)} "
         f"Original question: {original_question or 'general reading'}. Cards: {cards}. Earlier reading: {reading[:900]}. "
-        f"Follow-up: {followup[:400]}. Stay grounded in the same draw, add no new cards, cite no sources, and do not guarantee fate."
+        f"Follow-up: {followup[:400]}. Answer the follow-up directly and clearly using the same cards, "
+        "connect it to the original question, and end in a complete sentence. Explain lore if needed. "
+        "Add no cards, cite no sources, and do not guarantee fate."
     )
 
 
@@ -1023,7 +1085,7 @@ class TarotRevealView(OwnerView):
         except Exception:
             reading = ""
         if not reading:
-            reading = fallback_reading(self.spread_key, self.draws, self.preferences)
+            reading = fallback_reading(self.spread_key, self.draws, self.preferences, question=self.question)
         result = TarotResultView(self.owner_id, self.bot_name, self.ai_callback, self.question, self.preferences, self.store, self.spread_key, self.draws, reading)
         art = await asyncio.to_thread(render_spread_image, self.spread_key, self.draws)
         await self.store.validate()
@@ -1083,12 +1145,12 @@ class TarotResultView(OwnerView):
                 self.reading,
                 self.preferences,
             )
-        return [self._single_content()]
+        return self._single_content_pages()
 
     def content(self):
         return self.content_pages()[0]
 
-    def _single_content(self):
+    def _single_content_pages(self):
         heading = f"🔮 **{self.bot_name}'s {SPREADS[self.spread_key].label}**"
         if self.question:
             heading += f"\n*Question: {self.question}*"
@@ -1097,16 +1159,21 @@ class TarotResultView(OwnerView):
             result = yes_no_analysis(self.draws)
             extra = f"\n**Signal:** {result.positive} positive · {result.uncertain} uncertain · {result.warning} warning"
         fixed = f"{heading}\n\n{draw_summary(self.draws)}{extra}\n\n"
-        available = max(300, 1950 - len(fixed))
-        reading = self.reading
-        if len(reading) > available:
-            reading = reading[:available-1].rsplit(" ", 1)[0] + "…"
-        return fixed + reading
+        continued = f"🔮 **{self.bot_name}'s {SPREADS[self.spread_key].label} (continued)**\n\n"
+        return paginate_tarot_text(fixed, self.reading, continuation=continued)
+
+    def _single_content(self):
+        return self._single_content_pages()[0]
 
     async def _private_send(self, interaction, content, **kwargs):
-        await self.store.validate()
-        kwargs["ephemeral"] = _private_interaction(interaction, self.preferences)
-        await interaction.followup.send(content[:1950], allowed_mentions=discord.AllowedMentions.none(), **kwargs)
+        pages = paginate_tarot_text("", content, continuation="🔮 **Reading continued**\n\n")
+        for index, page in enumerate(pages):
+            await self.store.validate()
+            options = dict(kwargs)
+            if index:
+                options.pop("file", None)
+            options["ephemeral"] = _private_interaction(interaction, self.preferences)
+            await interaction.followup.send(page, allowed_mentions=discord.AllowedMentions.none(), **options)
 
     @discord.ui.button(label="Draw a clarifier", emoji="🔍", style=discord.ButtonStyle.primary, row=0)
     @serialized_action
@@ -1120,7 +1187,7 @@ class TarotResultView(OwnerView):
         item = draw_one("Clarifier", reversals=self.preferences.reversals, exclude={draw.card.stem for draw in self.draws})
         prompt = build_clarifier_prompt(self.bot_name, self.question, self.draws, item, self.preferences)
         try:
-            explanation = (await self.ai_callback(prompt, 220)).strip()
+            explanation = (await self.ai_callback(prompt, 320)).strip()
         except Exception:
             explanation = ""
         explanation = explanation or f"{item.meaning(self.preferences.meaning_mode).capitalize()}. This is the pressure point that clarifies the original pattern."
@@ -1169,7 +1236,7 @@ class TarotResultView(OwnerView):
             return
         await interaction.response.defer(thinking=True, ephemeral=_private_interaction(interaction, self.preferences))
         try:
-            answer = (await self.ai_callback(build_explain_prompt(self.bot_name, self.question, item, self.preferences), 240)).strip()
+            answer = (await self.ai_callback(build_explain_prompt(self.bot_name, self.question, item, self.preferences), 320)).strip()
         except Exception:
             answer = ""
         answer = answer or item.meaning(self.preferences.meaning_mode).capitalize() + "."
@@ -1183,7 +1250,7 @@ class TarotResultView(OwnerView):
             return
         await interaction.response.defer(thinking=True, ephemeral=_private_interaction(interaction, self.preferences))
         try:
-            answer = (await self.ai_callback(build_followup_prompt(self.bot_name, self.question, followup, self.draws, self.reading, self.preferences), 280)).strip()
+            answer = (await self.ai_callback(build_followup_prompt(self.bot_name, self.question, followup, self.draws, self.reading, self.preferences), 360)).strip()
         except Exception:
             answer = ""
         answer = answer or "The existing pattern does not become clearer by forcing it. Re-read the outcome beside the obstacle."

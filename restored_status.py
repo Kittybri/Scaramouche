@@ -8,17 +8,24 @@ class ProviderStatus:
         self.owner_id, self.monitor = owner_id, monitor
 
     async def state(self):
-        clients = getattr(self.client, "_clients", ())
-        if not clients:
-            return "not_configured"
-        exhausted = getattr(self.client, "is_exhausted", None)
-        if exhausted and exhausted():
-            return "cooldown"
-        if self.monitor:
-            snapshot = await self.monitor.collect()
-            if snapshot.provider_status in {"recovering", "degraded"}:
-                return snapshot.provider_status
-        return "configured"  # No active API probe: do not claim verified provider health.
+        """Read-only diagnostic; never call the text provider or expose errors."""
+        try:
+            clients = getattr(self.client, "_clients", ())
+            if not clients:
+                return "not_configured"
+            exhausted = getattr(self.client, "is_exhausted", None)
+            if exhausted is not None and exhausted():
+                return "cooldown"
+            if self.monitor:
+                snapshot = await self.monitor.collect()
+                status = getattr(snapshot, "provider_status", "")
+                if status in {"recovering", "degraded"}:
+                    return status
+            return "configured"  # Configuration/observations, NOT a live API probe.
+        except Exception:
+            # Provider/monitor failures must not crash status commands or
+            # publish exception text, credentials, prompts or raw responses.
+            return "diagnostics_unavailable"
 
     async def command(self, ctx):
         state = await self.state()

@@ -1,5 +1,15 @@
 # Connected Accounts — Google Phase 1
 
+> **Current October 2026 note:** The original feature-branch SHAs below
+> are preserved as historical implementation context. The present release
+> heads are Scaramouche `03a8ae03d35e42511390717ec2cbd63d4c508390`
+> and Wanderer `3b998a71b3f3d75c14b7eeef00932e31c60569a5`.
+> The OAuth callback was deployed and staging-tested on Oracle as recorded
+> in [STAGING_VALIDATION.md](STAGING_VALIDATION.md); Google Production
+> verification, public site publication and Phase 2 remain incomplete.
+> Do not restart the callback as collateral for documentation changes.
+
+
 ## Release boundary and current state
 
 This feature is isolated on `feature/connected-accounts-google` in both repositories,
