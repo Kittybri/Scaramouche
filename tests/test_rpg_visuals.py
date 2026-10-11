@@ -84,10 +84,11 @@ def test_corrupted_and_takeover_portraits_are_isolated(tmp_path):
     assert takeover == legacy
     horror.parent.mkdir()
     Image.new("RGB", (80, 80), "red").save(horror)
-    takeover.parent.mkdir()
-    Image.new("RGB", (80, 80), "green").save(takeover.parent / takeover.name)
+    preferred_takeover = root / "takeover" / "06-scaramouche.jpg"
+    preferred_takeover.parent.mkdir()
+    Image.new("RGB", (80, 80), "green").save(preferred_takeover)
     assert portrait_path(boss, "Scaramouche", tmp_path, world="horror") == horror
-    assert portrait_path(boss, "Scaramouche", tmp_path, world="takeover") == takeover.parent / takeover.name
+    assert portrait_path(boss, "Scaramouche", tmp_path, world="takeover") == preferred_takeover
     assert portrait_path(boss, "Wanderer", tmp_path, world="horror").name == "06-wanderer.jpg"
 
 
