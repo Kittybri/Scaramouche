@@ -83,3 +83,24 @@ World backgrounds, facial art and corruption are composited independently.
    medal/defeat screens, fallbacks with missing/corrupted JPEGs.
 4. Confirm no extra unwanted pings or RPG narrative changes; never deploy,
    restart, change live assets, or merge without the owner's approval.
+
+
+## Code-hardening update (2026-10-10)
+
+The user halted image generation and requested code-only continuation.
+
+- Separate `assets/rpg/portraits/horror/` and `assets/rpg/portraits/takeover/`
+  folders are now supported. Horror NEVER silently uses an ordinary/takeover
+  portrait as its substitute. A legacy `assets/rpg/portraits/11.jpg` etc.
+  file may be used for takeover only until that artwork is migrated.
+- The rank-six filenames remain distinct by bot: `06-scaramouche.jpg` and
+  `06-wanderer.jpg`, in *each* world's folder. Final horror forms must be
+  clearly altered versions of the actual characters, not shared generic monsters.
+- Artwork is now `RPG_ART_ENABLED=1` **explicit opt-in**, default OFF,
+  until the artwork is approved and packaged; leaving the flag unset preserves
+  the original text-only experience.
+- The world-backdrop cache notices when approved files are installed/replaced.
+- Preparing a Discord attachment happens before changing the original embed,
+  so an asset-construction failure cannot leave a broken attachment URL.
+- Existing portrait generation is not resumed, no assets are added to GitHub,
+  and there are no service operations in this code-only patch.

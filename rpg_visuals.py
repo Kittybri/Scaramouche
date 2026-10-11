@@ -67,16 +67,39 @@ def portrait_filename(boss, bot_name):
     return "06-" + name + ".jpg" if rank == 6 else "%02d.jpg" % rank
 
 
-def portrait_path(boss, bot_name, art_dir=None):
+def portrait_path(boss, bot_name, art_dir=None, *, world="takeover"):
+    """Horror and takeover MUST use separate approved character illustrations.
+
+    Legacy unqualified portraits are usable for takeover only, never as an
+    accidental substitute for an eldritch horror character.
+    """
     filename = portrait_filename(boss, bot_name)
-    return ((Path(art_dir) if art_dir is not None else ART_DIR) / "portraits" / filename) if filename else None
+    if filename is None:
+        return None
+    root = (Path(art_dir) if art_dir is not None else ART_DIR) / "portraits"
+    selected = root / _world(world) / filename
+    if selected.is_file() or _world(world) == "horror":
+        return selected
+    legacy = root / filename
+    return legacy if legacy.is_file() else selected
+
+
+def _backdrop(world, size=(1100, 660), art_dir=None):
+    """Invalidate the cache when a curator installs or replaces world art."""
+    world = _world(world)
+    path = (Path(art_dir) if art_dir is not None else ART_DIR) / "worlds" / (world + ".jpg")
+    try:
+        info = path.stat()
+        signature = (info.st_mtime_ns, info.st_size)
+    except OSError:
+        signature = None
+    return _backdrop_cached(world, size, str(path), signature)
 
 
 @lru_cache(maxsize=8)
-def _backdrop(world, size=(1100, 660), art_dir=None):
-    world = _world(world)
+def _backdrop_cached(world, size, path_string, _signature):
     w, h = size
-    path = (Path(art_dir) if art_dir is not None else ART_DIR) / "worlds" / (world + ".jpg")
+    path = Path(path_string)
     if path.is_file():
         with Image.open(path) as source:
             image = ImageOps.fit(source.convert("RGB"), size, method=Image.Resampling.LANCZOS)
@@ -118,8 +141,8 @@ def _frame(draw, w, h, accent):
             draw.ellipse((x-9, y-9, x+9, y+9), fill=(219, 190, 112))
 
 
-def _paste_portrait(image, boss, bot_name, target, art_dir):
-    path = portrait_path(boss, bot_name, art_dir)
+def _paste_portrait(image, boss, bot_name, target, art_dir, world):
+    path = portrait_path(boss, bot_name, art_dir, world=world)
     if not path or not path.is_file():
         return False
     try:
@@ -222,7 +245,7 @@ def render_scene(*, kind="encounter", world="horror", boss=None, bot_name="Wande
     d.rounded_rectangle((494, 88, 1060, 532), radius=18, fill=(7, 12, 29, 220),
                         outline=(199, 174, 115, 210), width=3)
     if boss:
-        has_art = _paste_portrait(image, boss, bot_name, (47, 98, 455, 520), art_dir)
+        has_art = _paste_portrait(image, boss, bot_name, (47, 98, 455, 520), art_dir, world)
         d = ImageDraw.Draw(image, "RGBA")
         if world == "horror" and has_art:
             _corruption(d, rank, (47, 98, 455, 520))
@@ -288,7 +311,7 @@ def render_war_table(*, world="horror", defeated=(), total=0, bot_name="Wanderer
         else:
             name=NAMES[i]
         boss={"rank":rank,"name":name}
-        exists=_paste_portrait(image,boss,bot_name,(left,top,left+136,top+141),art_dir)
+        exists=_paste_portrait(image,boss,bot_name,(left,top,left+136,top+141),art_dir,world)
         d=ImageDraw.Draw(image,"RGBA")
         if exists and world=="horror":
             _corruption(d,rank,(left,top,left+136,top+141))
@@ -322,7 +345,7 @@ async def illustrated_send(channel, embed, *, kind="encounter", world="horror",
         kwargs["view"]=view
     if allowed_mentions is not None:
         kwargs["allowed_mentions"]=allowed_mentions
-    if os.getenv("RPG_ART_ENABLED","1").strip().lower() not in {"0","false","off","no"}:
+    if os.getenv("RPG_ART_ENABLED", "0").strip().lower() in {"1", "true", "on", "yes"}:
         try:
             art = await asyncio.to_thread(
                 render_war_table if board else render_scene,
@@ -333,8 +356,11 @@ async def illustrated_send(channel, embed, *, kind="encounter", world="horror",
                     "defeated":defeated,"origin":origin,"element":element,"roll":roll})
             )
             filename="harbinger-war-table.jpg" if board else "harbinger-battlefield.jpg"
-            embed.set_image(url="attachment://"+filename)
-            kwargs["file"]=discord.File(art,filename=filename)
+            # Construct the Discord attachment before changing the original embed.
+            # A failed File constructor must never leave a dangling image URL.
+            attachment = discord.File(art, filename=filename)
+            kwargs["file"] = attachment
+            embed.set_image(url="attachment://" + filename)
         except Exception as exc:
             LOG.warning("RPG artwork unavailable; sending original text (%s)",type(exc).__name__)
     return await channel.send(**kwargs)
