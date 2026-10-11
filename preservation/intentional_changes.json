@@ -6,5 +6,18 @@
     "replacement": "RESTORATION_REVIEW.md; existing Unrestricted rename retained; Docs/Drive deferred to Phase 2; FaceProfiles enrollment/recognition/deletion remain, not an import/export equivalent.",
     "privacy_impact": "No Google credential/scope changes, no legacy bulk history replay or biometric import/export, no other-user birthday registration. Private legacy RPG dates/progress are not published into guessed guilds.",
     "validation": "Full suites, preservation negative cases, registration/import checks and staging evidence recorded in STAGING_VALIDATION.md."
+  },
+  {
+    "authorization": "User explicitly requested on 2026-10-10: remove /tarot and /dailycard from both bots in favor of persistent ! command entry points, adding !scaradailycard to Scaramouche.",
+    "removed_surfaces": [
+      "slash:tarot",
+      "slash:dailycard",
+      "help:/tarot",
+      "help:/dailycard"
+    ],
+    "reason": "Ephemeral slash tarot/daily panels disappear when dismissed; user prefers prefix commands and revisit-able Discord history.",
+    "replacement": "Wanderer !tarot and !dailycard; Scaramouche !scaratarot and !scaradailycard (with historical !scaradaily alias); /tarothistory and /tarotsettings retained.",
+    "privacy_impact": "Existing public/private tarot preference and private DM handling stay unchanged; no secret scopes, user data, or saved readings are modified.",
+    "validation": "Existing tarot restoration/preservation tests updated; new regression coverage validates command list and selective Discord global-command retirement. Full suite and preservation CI must pass before merge or deploy."
   }
 ]

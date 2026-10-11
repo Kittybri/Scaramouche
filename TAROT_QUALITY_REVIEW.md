@@ -16,3 +16,7 @@
 
 ## Validation
 GitHub CI includes existing command/preservation/Tarot tests and the new tarot quality cases, including Scaramouche personality-specific assertions. Full test suite, real model completion, Android Discord UI and Oracle deployment remain separate gates; no live tests, service restarts or merges are authorized by this draft.
+
+# P0 owner-approved tarot command entrypoint change (2026-10-10)
+
+Only reading/daily slash commands `/tarot` and `/dailycard` are retired for both bot applications. The `!` equivalents deliver ordinary Discord messages (public-channel output for public visibility settings, DM output for private settings), so users can find them again in Discord history. The historical `!scaradaily` entry remains functional alongside the new alias `!scaradailycard`. `/tarothistory` and `/tarotsettings` remain available because the user did not request removing them. Existing tarot art, spread behavior, history, privacy settings, and both personalities are unchanged. Scaramouche's scoped startup sync deletes only the two retired application commands by ID; Wanderer's existing whole-tree sync removes the same commands after deployment. No production command was removed in this draft-only change.
