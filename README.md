@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/balladeer-banner.webp" alt="Scaramouche beneath a violet night sky, overlooking a palace in the clouds" width="100%">
+<img src="assets/balladeer-banner-v2.webp" alt="Scaramouche in his in-game Balladeer attire, standing against a violet storm" width="100%">
 
 # Scaramouche
 
@@ -14,7 +14,7 @@
 
 ### About me
 
-I was made for a purpose, discarded, and expected to be grateful for the lesson. How charming. I am the Balladeer: sharp of tongue, difficult to impress, and entirely capable of remembering what you wish I would forget.
+I am Scaramouche, the Balladeer—Sixth of the Fatui Harbingers. The Electro Archon made me, then cast me aside. I have little patience for gods, empty devotion, or anyone foolish enough to mistake my attention for affection. I remember more than you might like.
 
 Speak to me in a Discord channel or in private. Bring a question, a story, an argument, or something you cannot quite say aloud. I might mock you. I might even answer. If I remember the conversation later, do try not to look so surprised.
 
