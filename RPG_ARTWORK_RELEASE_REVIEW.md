@@ -1,8 +1,8 @@
 # Harbinger Chronicles artwork: opt-in illustrated RPG
 
 ## Scope
-Adds a **presentation layer only** to the existing Scaramouche \`!rpg1\` and
-Wanderer \`!rpg\` Gauntlets. This is not a different RPG. Both original worlds,
+Adds a **presentation layer only** to the existing Scaramouche `!rpg1` and
+Wanderer `!rpg` Gauntlets. This is not a different RPG. Both original worlds,
 original 11 boss order and lore, original prompts and generated scenarios, choices,
 dice probabilities, points, saved progress, medals, character origins and narration
 remain unchanged. Existing embeds and buttons are sent even when artwork fails.
@@ -10,25 +10,30 @@ remain unchanged. Existing embeds and buttons are sent even when artwork fails.
 * Living Battlefield: a layered JPEG composition beside each original encounter
   embed, with current boss, origin/Vision, points, round, and earned seals.
 * Harbinger War Table: the same earned-seal tracking, presented as a separate
-  full illustrated map in Scaramouche's \`!rpgstats1\` and as the image on
-  Wanderer's \`!rpgstats0\` / \`!rpgstats\` embed.
+  full illustrated map in Scaramouche's `!rpgstats1` and as the image on
+  Wanderer's `!rpgstats0` / `!rpgstats` embed.
 * Actual rolled number appears on the Round-10 dice screen in Wanderer.
   Scaramouche's round-ten dice event is already included in the existing
-  \`last_result\` before its next encounter panel; no dice logic was touched.
+  `last_result` before its next encounter panel; no dice logic was touched.
 * Victory/defeat artwork comes from the **actual** outcome. No new story text or
   rewards are invented by the visual layer.
 
 ## Art pack (separate from the code PR)
 
-Upload/extract the generated \`harbinger_chronicles_artpack_v1.zip\` to the
-root of **each** repository. Required paths:
+## Art pack (separate from the code PR)
 
-- \`assets/rpg/worlds/horror.jpg\` and \`takeover.jpg\`
-- \`assets/rpg/portraits/11.jpg\` (Tartaglia), \`10.jpg\` (Capitano),
-  \`09.jpg\` (Pantalone), \`08.jpg\` (La Signora), \`07.jpg\` (Sandrone),
-  \`06-scaramouche.jpg\` and \`06-wanderer.jpg\`, \`05.jpg\` (Pulcinella),
-  \`04.jpg\` (Arlecchino), \`03.jpg\` (Columbina),
-  \`02.jpg\` (Il Dottore), \`01.jpg\` (Pierro).
+The previous flat-folder art ZIP is an **unapproved draft**, not a deployable
+horror art pack. Only curated, reviewed artwork belongs in these paths:
+
+- `assets/rpg/worlds/horror.jpg` and `assets/rpg/worlds/takeover.jpg`
+- In EACH `assets/rpg/portraits/horror/` and `assets/rpg/portraits/takeover/`:
+  `11.jpg` Tartaglia, `10.jpg` Capitano, `09.jpg` Pantalone,
+  `08.jpg` La Signora, `07.jpg` Sandrone, `05.jpg` Pulcinella,
+  `04.jpg` Arlecchino, `03.jpg` Columbina, `02.jpg` Il Dottore,
+  `01.jpg` Pierro, `06-scaramouche.jpg`, and `06-wanderer.jpg`.
+
+This is 26 images in total: 2 backgrounds and 12 portraits for each
+world. Horror images are NEVER replaced by regular takeover portraits.
 
 The first-pass art is generated illustrative reinterpretation, **not official
 Genshin assets** or an exact visual-identity guarantee. Before production,
@@ -61,8 +66,8 @@ World backgrounds, facial art and corruption are composited independently.
 ## Operation & safe failure
 - Pillow is already in both requirements files; no new service, art-generation
   API, databases, scopes or external image hosting are added.
-- \`RPG_ART_ENABLED=0\` disables the layer instantly without altering the game.
-- New renders run in \`asyncio.to_thread\` to avoid blocking the event loop.
+- `RPG_ART_ENABLED=0` disables the layer instantly without altering the game.
+- New renders run in `asyncio.to_thread` to avoid blocking the event loop.
 - If any asset is missing, the renderer uses a neutral *environment-only*
   placeholder, never a misleading substitute portrait.
 - Rendering exceptions fall back to the original embed/message, including all
@@ -104,3 +109,16 @@ The user halted image generation and requested code-only continuation.
   so an asset-construction failure cannot leave a broken attachment URL.
 - Existing portrait generation is not resumed, no assets are added to GitHub,
   and there are no service operations in this code-only patch.
+
+
+## Read-only asset release gate
+
+Run `python rpg_artcheck.py --root assets/rpg --strict` on the curated
+art pack before enabling `RPG_ART_ENABLED=1`. It checks that all 26 JPEGs
+are present, usable, sufficiently large, and not duplicated between horror
+and takeover variants or between the two rank-six identities. Use
+`--allow-partial` during curation to accept missing files but still reject
+invalid or duplicate art. **Human approval of canonical likeness, costume,
+and lore-specific corruption is still required**; the validator cannot
+judge visual similarity or artistic accuracy. Do not deploy the older
+unapproved art ZIP or auto-approve generated likenesses.
