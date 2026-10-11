@@ -195,6 +195,26 @@ def render_scene(*, kind="encounter", world="horror", boss=None, bot_name="Wande
     rank = int((boss or {}).get("rank", 0))
     tint = SIGNATURE.get(rank, ("WORLD", (171, 118, 195)))[1]
     w, h = (1100, 660)
+    if kind == "world" and boss is None:
+        # Both choices are shown without changing their original labels/buttons.
+        image = Image.new("RGB", (w, h))
+        image.paste(_backdrop("horror", (w // 2, h), art_dir), (0, 0))
+        image.paste(_backdrop("takeover", (w // 2, h), art_dir), (w // 2, 0))
+        d = ImageDraw.Draw(image, "RGBA")
+        d.rounded_rectangle((35, 130, 525, 512), radius=20,
+                            fill=(18, 8, 30, 128), outline=(192, 112, 185), width=4)
+        d.rounded_rectangle((575, 130, 1065, 512), radius=20,
+                            fill=(10, 22, 45, 145), outline=(110, 178, 225), width=4)
+        _text(d, (55, 51), "CHOOSE YOUR WORLD", 42, (242, 216, 152), True)
+        _text(d, (68, 310), "CORRUPTED HORROR", 28, (239, 178, 207), True)
+        _text(d, (607, 310), "HARBINGER TAKEOVER", 28, (180, 220, 254), True)
+        _text(d, (69, 369), "TWISTED DELUSIONS", 19, (237, 214, 227))
+        _text(d, (606, 369), "FATUI OCCUPATION", 19, (217, 227, 247))
+        _frame(d, w, h, (173, 135, 205))
+        buf = io.BytesIO()
+        image.save(buf, format="JPEG", quality=88, optimize=True)
+        buf.seek(0)
+        return buf
     image = _backdrop(world, (w, h), art_dir).copy()
     d = ImageDraw.Draw(image, "RGBA")
     d.rounded_rectangle((36, 88, 465, 532), radius=16, fill=(9, 15, 30, 220),
