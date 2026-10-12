@@ -33,4 +33,6 @@ Speak to me in a Discord channel or in private. Bring a question, a story, an ar
 
 <sub>Fan-made Genshin Impact character bot for Discord. Not affiliated with HoYoverse.</sub>
 
+[Privacy policy](PRIVACY.md)
+
 </div>

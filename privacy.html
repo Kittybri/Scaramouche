@@ -1,114 +1,81 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Privacy Policy — Scaramouche Bot</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="How Scaramouche Bot handles data, outside services, retention, and deletion requests.">
+  <title>Privacy Policy · Scaramouche Bot</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      background: #0d0d14;
-      color: #c9c3d4;
-      font-family: 'Georgia', serif;
-      line-height: 1.8;
-      padding: 60px 20px;
-    }
-    .container { max-width: 780px; margin: 0 auto; }
-    .header {
-      border-left: 3px solid #6b21a8;
-      padding-left: 20px;
-      margin-bottom: 48px;
-    }
-    .header h1 {
-      font-size: 2rem;
-      color: #e2d9f3;
-      letter-spacing: 0.04em;
-      margin-bottom: 6px;
-    }
-    .header p { color: #7c6f99; font-size: 0.9rem; }
-    h2 {
-      color: #a78bca;
-      font-size: 1.1rem;
-      margin: 36px 0 10px;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-    }
-    p { margin-bottom: 14px; color: #b0a8c2; }
-    ul { margin: 10px 0 14px 20px; color: #b0a8c2; }
-    ul li { margin-bottom: 6px; }
-    a { color: #a78bca; }
-    .footer {
-      margin-top: 60px;
-      padding-top: 24px;
-      border-top: 1px solid #1e1a2e;
-      color: #4a4260;
-      font-size: 0.85rem;
-    }
+    :root { color-scheme: dark; --page:#0e0c17; --panel:#171326; --text:#ece8f7; --muted:#b3acc6; --line:#393149; --accent:#c6a1f3; --code:#302641; }
+    body.wanderer { --page:#091a25; --panel:#102c3b; --text:#edf8fb; --muted:#abc9d3; --line:#335467; --accent:#9ce1df; --code:#1b4353; }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; }
+    body { margin:0; background:var(--page); color:var(--text); font:16px/1.7 system-ui,-apple-system,"Segoe UI",sans-serif; }
+    a { color:var(--accent); }
+    a:focus-visible { outline:2px solid var(--accent); outline-offset:4px; }
+    .shell { width:min(100% - 32px, 860px); margin:auto; padding:28px 0 68px; }
+    .topline { display:flex; align-items:center; justify-content:space-between; gap:20px; margin-bottom:18px; color:var(--muted); font-size:.83rem; letter-spacing:.12em; text-transform:uppercase; }
+    .topline a { text-decoration:none; letter-spacing:normal; text-transform:none; font-size:.9rem; }
+    .hero { position:relative; overflow:hidden; min-height:300px; display:flex; align-items:end; border:1px solid var(--line); border-radius:20px; background:var(--panel); }
+    .hero img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; object-position:center 32%; opacity:.68; }
+    .hero::after { content:""; position:absolute; inset:0; background:linear-gradient(0deg,var(--page) 2%,transparent 92%); }
+    .hero-copy { position:relative; z-index:1; padding:30px 36px; }
+    .eyebrow { color:var(--accent); font-size:.76rem; font-weight:700; letter-spacing:.18em; text-transform:uppercase; }
+    h1 { margin:8px 0 6px; font:600 clamp(2.4rem,7vw,4.2rem)/1.08 Georgia,serif; letter-spacing:-.04em; }
+    .date { margin:0; color:var(--muted); }
+    main { margin-top:28px; padding:10px clamp(20px,5vw,54px) 34px; background:var(--panel); border:1px solid var(--line); border-radius:20px; }
+    main > p:first-child { font-size:1.08rem; color:var(--text); }
+    h2 { margin:37px 0 11px; padding-top:10px; border-top:1px solid var(--line); color:var(--accent); font:600 1.35rem/1.3 Georgia,serif; }
+    p,li { color:var(--muted); }
+    p { margin:0 0 18px; }
+    ul { margin:10px 0 22px; padding-left:24px; }
+    li { padding-left:6px; margin:0 0 12px; }
+    strong { color:var(--text); }
+    code { padding:.13em .4em; border-radius:5px; background:var(--code); color:var(--text); font-size:.92em; }
+    footer { display:flex; justify-content:space-between; gap:18px; flex-wrap:wrap; padding:22px 4px 0; color:var(--muted); font-size:.84rem; }
+    @media (max-width:560px) { .hero { min-height:230px; } .hero-copy { padding:22px; } .shell { width:min(100% - 20px,860px); padding-top:16px; } }
   </style>
 </head>
-<body>
-  <div class="container">
-    <div class="header">
-      <h1>Privacy Policy</h1>
-      <p>Scaramouche Bot &mdash; Last updated: 2025</p>
-    </div>
-
-    <h2>1. Overview</h2>
-    <p>This Privacy Policy explains what data Scaramouche Bot ("the Bot") collects, how it is used, and how it is stored. We take your privacy seriously and collect only what is necessary for the Bot to function.</p>
-
-    <h2>2. Data We Collect</h2>
-    <p>The Bot collects and stores the following data when you interact with it:</p>
-    <ul>
-      <li><strong>Discord User ID</strong> — to identify you across conversations</li>
-      <li><strong>Discord Username &amp; Display Name</strong> — to address you correctly</li>
-      <li><strong>Message Content</strong> — your messages to the Bot, stored as conversation history to enable memory features</li>
-      <li><strong>User Preferences</strong> — mode settings such as NSFW mode, romance mode, and proactive messaging toggles</li>
-      <li><strong>Channel &amp; Server IDs</strong> — to track which channels are active for proactive messaging</li>
-    </ul>
-
-    <h2>3. How We Use Your Data</h2>
-    <p>Collected data is used exclusively to:</p>
-    <ul>
-      <li>Provide conversation memory so the Bot remembers past interactions</li>
-      <li>Store your personal preferences and mode settings</li>
-      <li>Enable proactive messaging features (if opted in)</li>
-    </ul>
-    <p>Your data is never sold, shared with third parties, or used for advertising.</p>
-
-    <h2>4. Third-Party Services</h2>
-    <p>The Bot uses the following third-party APIs to function. Your messages may be processed by these services:</p>
-    <ul>
-      <li><strong>Anthropic (Claude API)</strong> — processes your messages to generate responses. See <a href="https://www.anthropic.com/privacy" target="_blank">Anthropic's Privacy Policy</a>.</li>
-      <li><strong>Fish Audio</strong> — processes text to generate voice responses. See <a href="https://fish.audio/privacy/" target="_blank">Fish Audio's Privacy Policy</a>.</li>
-    </ul>
-
-    <h2>5. Data Storage</h2>
-    <p>Data is stored in a local SQLite database on the server hosting the Bot. It is not stored in any external database or cloud storage service beyond the hosting platform (Railway).</p>
-
-    <h2>6. Data Retention</h2>
-    <p>Conversation history is retained indefinitely to enable memory features. You can delete your own data at any time by using the <strong>!reset</strong> command, which wipes your conversation history from the database.</p>
-
-    <h2>7. Your Rights</h2>
-    <p>You have the right to:</p>
-    <ul>
-      <li>Delete your conversation history at any time using <strong>!reset</strong></li>
-      <li>Opt out of proactive messaging using <strong>!proactive off</strong></li>
-      <li>Opt out of voluntary DMs using <strong>!dms off</strong></li>
-      <li>Request complete removal of your data by contacting the Bot owner</li>
-    </ul>
-
-    <h2>8. Children's Privacy</h2>
-    <p>The Bot is not intended for users under the age of 13. We do not knowingly collect data from children under 13. If you believe a child has used the Bot, please contact the Bot owner for data removal.</p>
-
-    <h2>9. Changes to This Policy</h2>
-    <p>This Privacy Policy may be updated at any time. Continued use of the Bot after changes constitutes acceptance of the updated policy.</p>
-
-    <h2>10. Contact</h2>
-    <p>For privacy concerns or data removal requests, contact the Bot owner through the Discord server where the Bot is hosted.</p>
-
-    <div class="footer">
-      &copy; 2025 Scaramouche Bot &mdash; Fan Project &mdash; Not affiliated with HoYoverse
-    </div>
+<body class="scaramouche">
+  <div class="shell">
+    <nav class="topline" aria-label="Page navigation"><span>Scaramouche / Privacy</span><a href="README.md">Back to bot profile ↗</a></nav>
+    <header class="hero">
+      <img src="assets/balladeer-banner-v2.webp" alt="Scaramouche character artwork" loading="lazy">
+      <div class="hero-copy"><div class="eyebrow">Discord character bot</div><h1>Privacy Policy</h1><p class="date">Last updated October 11, 2026</p></div>
+    </header>
+    <main id="policy">
+<p>Scaramouche is a fan-made Discord character bot. This policy explains what the bot&#x27;s code accesses, stores, and sends to other services when you use it. Discord also handles your messages and account information under its own privacy policy.</p>
+<h2>Information the bot handles</h2>
+<ul>
+<li><strong>Discord identity and settings:</strong> Your user ID, username or display name, server and channel IDs, activity times, and the settings you choose, such as romance or NSFW mode, direct messages, and proactive replies.</li>
+<li><strong>Conversations and memory:</strong> Messages you send to the bot, its replies, summaries, remembered topics and jokes, game activity, and relationship or mood values used for continuing interactions. These records can include personal details you choose to share.</li>
+<li><strong>Channel context:</strong> To answer in context, the bot can read recent messages in a channel where it has access, including messages from people other than the person prompting it. The bot may send a shortened excerpt of that context and display names or mentions to its AI provider. It does not need to permanently save every message it reads for context.</li>
+<li><strong>Attachments and requests:</strong> When you send or refer to an image or video, the bot may download it and process image data or selected video frames. A text description of the media and your accompanying message may be saved in conversation memory. Search queries and a location you give to the weather command are also processed to answer you.</li>
+</ul>
+<h2>Why it uses this information</h2>
+<p>The bot uses this information to respond in character, remember conversations and preferences, manage games and relationship features, deliver optional direct messages, describe media, generate voice replies, and answer search or weather requests. Its code does not use this information for advertising.</p>
+<h2>Services that receive information</h2>
+<ul>
+<li><strong>Discord:</strong> Carries messages, commands, and bot replies. Discord retains its own copies according to its policies.</li>
+<li><strong>Groq:</strong> Receives prompts, relevant conversation memory and channel context to generate replies. Selected video frames can be sent for video understanding.</li>
+<li><strong>xAI:</strong> Receives an image and related prompt when the image-description feature is used.</li>
+<li><strong>Fish Audio or Google text-to-speech:</strong> Receives reply text when voice output is generated. Google text-to-speech is a fallback when Fish Audio is unavailable.</li>
+<li><strong>DuckDuckGo and the US National Weather Service:</strong> Receive a search query or supplied weather location when those features are used. The weather lookup may first send the location to a National Weather Service location search.</li>
+</ul>
+<p>The bot operator&#x27;s hosting provider processes stored data as part of running the bot. These services have their own retention and privacy practices. Only share content you are comfortable having processed for the features you use.</p>
+<h2>Storage and retention</h2>
+<p>The bot stores its memory and settings in SQLite databases on its configured host. Some interaction state is kept in a shared database for features involving Wanderer when the bots run together. The code has no automatic expiration for conversation history or saved preferences; they can remain until they are removed or the bot is retired. If the bots share a deployment, database backups made by Wanderer may contain older shared records. Media is downloaded for processing; the memory database generally stores descriptions and conversation text rather than the original image or video file. Discord and the services above may retain their own copies separately.</p>
+<h2>Your choices and deletion</h2>
+<ul>
+<li>Use <code>!reset</code> (or <code>!wipe</code>) to clear your stored conversation messages and much of the bot&#x27;s remembered topics, jokes, and relationship state. This command <strong>does not delete your entire account row, all preferences, every game or shared record, or copies held by Discord or outside services</strong>.</li>
+<li>Use <code>!proactive off</code> to stop proactive replies and <code>!dms off</code> to stop optional direct messages.</li>
+<li>To request a fuller deletion, correction, or a copy of data associated with your Discord user ID, contact the bot owner in the Discord server where you use Scaramouche. Say which bot and user ID the request concerns. Do not put private details in a public GitHub issue. The owner must handle records outside the scope of <code>!reset</code> and any copies under their control.</li>
+</ul>
+<h2>Age and changes</h2>
+<p>Use the bot only if you meet Discord&#x27;s minimum age requirement in your location. If you believe a younger person has used it, contact the owner to request deletion. This policy may change when the bot&#x27;s features or providers change; the updated date above shows the latest revision.</p>
+<p>Scaramouche is an unofficial fan project and is not affiliated with HoYoverse.</p>
+    </main>
+    <footer><span>Unofficial fan project · Not affiliated with HoYoverse</span><a href="PRIVACY.md">Plain text version</a></footer>
   </div>
 </body>
 </html>
