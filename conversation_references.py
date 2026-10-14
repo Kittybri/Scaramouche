@@ -73,7 +73,7 @@ def is_direct_message(message, bot_name, bot_id):
         return True
     name = "scaramouche|scara" if bot_name.lower() == "scaramouche" else "wanderer"
     if re.match(
-        rf"^\s*(?:(?:hey|hi|yo|okay|ok)\s*[,:!]?\s+)?(?:please\s+)?(?:{name})(?=\s|[:,!?]|$)",
+        rf"^\s*(?:(?:hey|hi|yo|okay|ok)\s*[,:!]?\s+)?(?:please\s+)?(?:{name})(?=[,:!?]|\s+(?:please|can|could|would|will|help|read|review|explain|summarize|search|check|look|tell|compare)\b)",
         getattr(message, "content", "") or "", re.I,
     ):
         return True
