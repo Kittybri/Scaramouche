@@ -60,5 +60,47 @@ class ResearchParsingTests(unittest.TestCase):
         self.assertNotIn("MENU", text)
 
 
+
+
+class NaturalResearchRoutingTests(unittest.TestCase):
+    def test_explicit_video_request(self):
+        from natural_research import detect_research_request
+        link = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        self.assertEqual(detect_research_request("Wanderer, explain " + link), ("youtube", link))
+
+    def test_web_and_github(self):
+        from natural_research import detect_research_request
+        self.assertEqual(detect_research_request("Scara, read https://example.org/article"),
+                         ("web", "https://example.org/article"))
+        self.assertEqual(detect_research_request("Wanderer, review repo octocat/Hello-World"),
+                         ("github", "octocat/Hello-World"))
+        self.assertEqual(detect_research_request("Wanderer, check https://github.com/octocat/Hello-World"),
+                         ("github", "octocat/Hello-World"))
+
+    def test_search_query(self):
+        from natural_research import detect_research_request
+        self.assertEqual(detect_research_request("Scara, search for Genshin patch notes"),
+                         ("search", "Genshin patch notes"))
+
+    def test_avoid_unrequested_or_unsafe_routing(self):
+        from natural_research import detect_research_request
+        for phrase in (
+            "I watched https://youtube.com/watch?v=dQw4w9WgXcQ",
+            "do not summarize https://example.org",
+            "!wanresearch web https://example.org",
+            "Scara, read https://127.0.0.1/secrets",
+            "Wanderer, review https://github.com/../secret",
+            "I am jealous of the bot",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIsNone(detect_research_request(phrase))
+
+    def test_addressing(self):
+        from natural_research import is_named_directly
+        self.assertTrue(is_named_directly("Wanderer, explain this URL", "wanderer"))
+        self.assertTrue(is_named_directly("hey Scara, research this", "scaramouche"))
+        self.assertFalse(is_named_directly("Scaramouche said something about Wanderer", "wanderer"))
+        self.assertFalse(is_named_directly("Wanderer, do something", "scaramouche"))
+
 if __name__ == "__main__":
     unittest.main()

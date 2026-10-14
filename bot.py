@@ -1893,6 +1893,14 @@ async def on_message(message):
 
         content = message.content.strip()
         if not content: return
+        # Direct, explicit natural-language research (after partner and mute checks).
+        try:
+            from natural_research import maybe_handle_natural_research
+            if await maybe_handle_natural_research(message, BOT_NAME, bot.user.id, qai, mem, dm_channel_id):
+                return
+        except Exception as e:
+            log_error("natural_research", e)
+
 
         # Milestone / anniversary checks
         try:
