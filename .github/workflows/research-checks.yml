@@ -18,3 +18,4 @@ jobs:
 
       - run: python -m unittest discover -s tests -p 'test_memory_retrieval.py' -v
       - run: python -m unittest discover -s tests -p 'test_natural_actions.py' -v
+      - run: python -m unittest discover -s tests -p "test_stabilization_contracts.py" -v

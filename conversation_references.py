@@ -35,6 +35,12 @@ def reset_sessions():
     """Test helper; runtime entries also expire automatically."""
     _sessions.clear()
 
+def forget_user(user_id, bot_name=None):
+    """Clear temporary references after the user resets their memory."""
+    for key in list(_sessions):
+        if key[2] == int(user_id) and (bot_name is None or key[0] == bot_name.lower()):
+            _sessions.pop(key, None)
+
 
 def _key(message, bot_name):
     return (bot_name.lower(),

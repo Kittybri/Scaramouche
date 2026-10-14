@@ -1394,6 +1394,15 @@ class Memory:
             await db.execute("DELETE FROM shared_inside_jokes WHERE user_id=?", (user_id,))
             await db.execute("DELETE FROM relationship_milestones WHERE scope LIKE ?", (f"%user:{user_id}",))
             await db.commit()
+        # Clear transient conversations and approvals only after persistent reset.
+        try:
+            from conversation_references import forget_user
+            from natural_actions import forget_pending
+            forget_user(user_id, self.bot_name)
+            forget_pending(user_id, self.bot_name)
+        except ImportError:
+            pass
+
 
     # ── Mute (in-memory) ──────────────────────────────────────────────────────
     def mute_user(self, user_id: int, seconds: int = 600):
@@ -1526,10 +1535,13 @@ class Memory:
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute("SELECT id,user_id,channel_id,reminder FROM reminders WHERE due_ts<=? AND done=0", (time.time(),)) as cur:
                 rows = await cur.fetchall()
-            if rows:
-                await db.execute(f"UPDATE reminders SET done=1 WHERE id IN ({','.join('?'*len(rows))})", [r[0] for r in rows])
-                await db.commit()
+            # Delivery must succeed before a reminder is acknowledged as done.
         return [{"id":r[0],"user_id":r[1],"channel_id":r[2],"reminder":r[3]} for r in rows]
+
+    async def mark_reminder_done(self, reminder_id: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE reminders SET done=1 WHERE id=? AND done=0", (reminder_id,))
+            await db.commit()
 
     # ── Channels ──────────────────────────────────────────────────────────────
     async def track_channel(self, channel_id: int, guild_id: int):
