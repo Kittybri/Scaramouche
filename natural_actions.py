@@ -216,13 +216,14 @@ async def maybe_handle_actions(
     Call AFTER the bot's existing ownership, banned-channel, partner and mute
     checks. This module never calls Google write APIs.
     """
-    if not is_direct_message(message, bot_name, bot_id):
-        return False
     content = (getattr(message, "content", "") or "").strip()
     if not content or content.startswith("!") or len(content) > 1800:
         return False
+    # Reply-ID confirmation works even when Discord has not cached the parent.
     if await confirm_if_reply(message, bot_name, memory):
         return True
+    if not is_direct_message(message, bot_name, bot_id):
+        return False
     _prune_pending()
     if LIST_REMINDERS.search(content):
         await _list_reminders(message, memory)

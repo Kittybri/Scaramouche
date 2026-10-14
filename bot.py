@@ -1655,6 +1655,7 @@ async def reminder_checker():
                     180,
                 )
                 await ch.send(f"{u.mention} {msg}")
+                await mem.mark_reminder_done(r["id"])
             except Exception as e: log_error("reminder_send", e)
     except Exception as e: log_error("reminder_checker", e)
 
@@ -2199,7 +2200,7 @@ async def on_message(message):
             from conversation_references import conversation_hint
             reference_hint = conversation_hint(message, BOT_NAME, bot.user.id)
             if reference_hint:
-                extra = f"{extra}\\n{reference_hint}" if extra else reference_hint
+                extra = f"{extra}\n{reference_hint}" if extra else reference_hint
         except Exception as e:
             log_error("conversation_hint", e)
 
