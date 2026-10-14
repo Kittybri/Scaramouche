@@ -1893,6 +1893,12 @@ async def on_message(message):
 
         content = message.content.strip()
         if not content: return
+        # Phase 1: collect bounded per-user/channel references before routing.
+        try:
+            from conversation_references import remember_direct_message
+            remember_direct_message(message, BOT_NAME, bot.user.id)
+        except Exception as e:
+            log_error("conversation_references", e)
         # Direct, explicit natural-language research (after partner and mute checks).
         try:
             from natural_research import maybe_handle_natural_research
@@ -2168,6 +2174,14 @@ async def on_message(message):
         except Exception as e: log_error("on_message/context", e)
 
         extra = "|".join(parts)
+        # Follow-up referents are read-only hints for the existing character AI.
+        try:
+            from conversation_references import conversation_hint
+            reference_hint = conversation_hint(message, BOT_NAME, bot.user.id)
+            if reference_hint:
+                extra = f"{extra}\\n{reference_hint}" if extra else reference_hint
+        except Exception as e:
+            log_error("conversation_hint", e)
 
         # Unsent simulation
         try:
