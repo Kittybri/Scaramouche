@@ -15,6 +15,8 @@ class ResearchParsingTests(unittest.TestCase):
             "https://user:password@example.com/",
             "https://printer.local/", "file:///etc/passwd",
             "https://[::1]/",
+            "https://example.org/\n@everyone",
+            "https://example.org/\rX-Test:evil",
         ]
         for url in blocked:
             with self.subTest(url=url), self.assertRaises(ResearchError):
@@ -34,7 +36,7 @@ class ResearchParsingTests(unittest.TestCase):
 
     def test_github_repo_file_spec(self):
         self.assertEqual(parse_repo_spec("octocat/hello-world:README.md"), ("octocat/hello-world", "README.md"))
-        for other in ["other", "octocat/repo:../config", "octocat/repo:/abs", "octocat/repo:dir//file"]:
+        for other in ["other", "./repo", "../repo", "octocat/repo:../config", "octocat/repo:/abs", "octocat/repo:dir//file"]:
             with self.subTest(other=other), self.assertRaises(ResearchError):
                 parse_repo_spec(other)
 

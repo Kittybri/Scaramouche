@@ -31,6 +31,8 @@ class ResearchError(Exception):
 def validate_public_url(url: str) -> str:
     if not isinstance(url, str) or not 9 <= len(url) <= 2048:
         raise ResearchError("Provide a valid public HTTPS URL.")
+    if any(ord(character) < 32 or ord(character) == 127 for character in url):
+        raise ResearchError("URL contains unsupported control characters.")
     try:
         parts = urlsplit(url.strip())
         host = (parts.hostname or "").rstrip(".").lower()
@@ -180,7 +182,7 @@ async def read_youtube(url: str) -> dict:
         snippets = await asyncio.wait_for(asyncio.to_thread(fetch), timeout=20)
     except ImportError as exc:
         raise ResearchError("YouTube transcript support is not installed.") from exc
-    except (asyncio.TimeoutError, Exception) as exc:
+    except Exception as exc:
         raise ResearchError("Transcript unavailable or YouTube blocked this server.") from exc
     content = []
     length = 0
@@ -203,7 +205,7 @@ REPO_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$")
 def parse_repo_spec(value: str) -> tuple[str, str | None]:
     repo, colon, path = (value or "").strip().partition(":")
     repo = repo.removeprefix("https://github.com/").strip("/")
-    if not REPO_RE.fullmatch(repo) or repo.split("/")[0].startswith("."):
+    if not REPO_RE.fullmatch(repo) or any(part in (".", "..") for part in repo.split("/")):
         raise ResearchError("Use owner/repo or owner/repo:path/to/file.py.")
     if colon:
         segments = path.split("/")

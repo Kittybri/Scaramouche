@@ -3,6 +3,8 @@ import asyncio
 import os
 from pathlib import Path
 import aiosqlite
+import discord
+import logging
 from discord.ext import commands, tasks
 from research_sources import ResearchError, read_feed, research, validate_public_url
 
@@ -23,10 +25,11 @@ def register(bot, name, summarize):
     async def reply(ctx, text):
         text = (text or "").replace("@", "@\u200b").replace(chr(96), "'").replace("<", "‹")
         for i in range(0, len(text), 1750):
-            await ctx.reply(text[i:i+1750], mention_author=False)
+            await ctx.reply(text[i:i+1750], mention_author=False, allowed_mentions=discord.AllowedMentions.none(), suppress_embeds=True)
 
     @commands.command(name=f"{prefix}research")
     @commands.cooldown(2, 30, commands.BucketType.user)
+    @commands.max_concurrency(3, per=commands.BucketType.default, wait=False)
     async def research_cmd(ctx, kind: str = "", *, target: str = ""):
         if not target:
             return await reply(ctx, f"Usage: !{prefix}research youtube|web|github|rss URL_or_owner/repo")
@@ -53,6 +56,7 @@ def register(bot, name, summarize):
 
     @commands.command(name=f"{prefix}feed")
     @commands.cooldown(2, 30, commands.BucketType.user)
+    @commands.max_concurrency(3, per=commands.BucketType.default, wait=False)
     async def feed_cmd(ctx, action: str = "list", *, url: str = ""):
         if ctx.guild is None:
             return await reply(ctx, "Subscriptions only work in server channels.")
@@ -118,11 +122,16 @@ def register(bot, name, summarize):
                 new = entries[:ids.index(last_id)] if last_id in ids else entries[:1]
                 for entry in reversed(new[:3]):
                     title = entry["title"].replace("@", "@\u200b").replace("<", "‹")
-                    await channel.send(f"New feed: {title[:150]}\n<{entry['url']}>")
+                    await channel.send(
+                        f"New feed: {title[:150]}\n<{entry['url']}>",
+                        allowed_mentions=discord.AllowedMentions.none(),
+                        suppress_embeds=True,
+                    )
                 async with aiosqlite.connect(path) as db:
                     await db.execute("UPDATE feeds SET last_id=? WHERE channel=? AND url=?", (entries[0]["id"], channel_id, url))
                     await db.commit()
             except Exception:
+                logging.exception("Research feed poll failed for channel %s", channel_id)
                 continue
             await asyncio.sleep(0.5)
 
