@@ -13,7 +13,7 @@ from research_sources import ResearchError, parse_repo_spec, research, validate_
 _URL = re.compile(r"https?://[^\s<>()]+", re.I)
 _ACTION = re.compile(
     r"\b(?:summari[sz]e|explain|read|analy[sz]e|review|check(?:\s+out)?|"
-    r"research|look\s+(?:at|up|into)|tell\s+me\s+(?:about|what)|"
+    r"research|search\s+(?:the\s+web\s+)?for|look\s+(?:at|up|into)|tell\s+me\s+(?:about|what)|"
     r"what\s+(?:does|is|are)|what['\u2019]?s\s+(?:in|new)|"
     r"give\s+me\s+(?:a\s+)?summary|find\s+(?:information|sources|updates))\b",
     re.I,
