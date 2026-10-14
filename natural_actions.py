@@ -90,9 +90,11 @@ def doc_summary_request(text):
     text = (text or "").strip()
     if len(text) > 1700 or text.startswith("!") or not READ_DOC.search(text):
         return None
-    if DOC_MUTATE.search(text):
-        return None
     urls = GOOGLE_LINK.findall(text)
+    # A normal Google Docs link ends with /edit; it is not an edit request.
+    instructions = GOOGLE_LINK.sub(" ", text)
+    if DOC_MUTATE.search(instructions):
+        return None
     if len(urls) != 1:
         return None
     return urls[0].rstrip(".,!?;)")
