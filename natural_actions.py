@@ -111,6 +111,12 @@ def _key(message, bot_name):
     return (bot_name.lower(), int(message.author.id), int(message.channel.id))
 
 
+def forget_pending(user_id, bot_name=None):
+    for key in list(_pending):
+        if key[1] == int(user_id) and (bot_name is None or key[0] == bot_name.lower()):
+            _pending.pop(key, None)
+
+
 def _prune_pending():
     now = time.monotonic()
     for key, item in list(_pending.items()):

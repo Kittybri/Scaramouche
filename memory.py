@@ -1394,6 +1394,15 @@ class Memory:
             await db.execute("DELETE FROM shared_inside_jokes WHERE user_id=?", (user_id,))
             await db.execute("DELETE FROM relationship_milestones WHERE scope LIKE ?", (f"%user:{user_id}",))
             await db.commit()
+        # Clear transient conversations and approvals only after persistent reset.
+        try:
+            from conversation_references import forget_user
+            from natural_actions import forget_pending
+            forget_user(user_id, self.bot_name)
+            forget_pending(user_id, self.bot_name)
+        except ImportError:
+            pass
+
 
     # ── Mute (in-memory) ──────────────────────────────────────────────────────
     def mute_user(self, user_id: int, seconds: int = 600):
