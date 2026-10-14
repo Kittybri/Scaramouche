@@ -10,3 +10,5 @@ python-pptx>=0.6.21
 python-docx>=1.1.0
 imageio-ffmpeg>=0.5.1
 requests>=2.32.0
+defusedxml>=0.7.1
+youtube-transcript-api>=1.2.0

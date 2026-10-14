@@ -3935,6 +3935,11 @@ async def on_command_error(ctx,error):
         else: log_error("on_command_error",error)
     except: pass
 
+
+# Optional read-only research tools; bot-specific names prevent cross-bot command clashes.
+from research_commands import register as register_research_tools
+register_research_tools(bot, BOT_NAME, qai)
+
 if __name__=="__main__":
     if not DISCORD_TOKEN: raise SystemExit("❌ DISCORD_TOKEN not set")
     if not _groq_keys: raise SystemExit("❌ No GROQ_API_KEY set (need at least GROQ_API_KEY)")
