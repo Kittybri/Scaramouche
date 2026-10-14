@@ -2174,6 +2174,14 @@ async def on_message(message):
         except Exception as e: log_error("on_message/context", e)
 
         extra = "|".join(parts)
+        # Phase 2: only explicit requests can retrieve older same-user/channel chat.
+        try:
+            from memory_retrieval import recall_hint
+            older_chat = await recall_hint(mem.db_path, message.author.id, dm_channel_id, BOT_NAME, content)
+            if older_chat:
+                extra = f"{extra}\n{older_chat}" if extra else older_chat
+        except Exception as e:
+            log_error("memory_retrieval", e)
         # Follow-up referents are read-only hints for the existing character AI.
         try:
             from conversation_references import conversation_hint
