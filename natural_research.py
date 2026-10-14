@@ -110,7 +110,7 @@ async def directed_at_me(message, bot_id: int, bot_name: str) -> bool:
 async def maybe_handle_natural_research(message, bot_name: str, bot_id: int, summarize, memory, channel_key: int) -> bool:
     request = detect_research_request(getattr(message, "content", ""))
     if request is None:
-        # Phase 1 stored this user/channel\u0027s public links. Resolve only explicit
+        # Phase 1 stored this user/channel's public links. Resolve only explicit
         # read-only follow-ups; never infer an external write operation.
         from conversation_references import resolve_followup
         request = resolve_followup(message, bot_name, bot_id)
@@ -140,7 +140,7 @@ async def maybe_handle_natural_research(message, bot_name: str, bot_id: int, sum
                     raise ResearchError("Please provide exactly two public sources.")
                 items = await asyncio.gather(*(research(k, url) for k, url in target))
                 excerpt = "\n\n".join(
-                    f"SOURCE {index}: {item[\u0027url\u0027]}\n{item[\u0027content\u0027][:2300]}"
+                    f"SOURCE {index}: {item['url']}\n{item['content'][:2300]}"
                     for index, item in enumerate(items, 1)
                 )
                 references = [item["url"] for item in items]
