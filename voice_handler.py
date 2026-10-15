@@ -5,11 +5,13 @@ Voice ID: fb95ab47841a4db189cb35fb619d4ea1
 
 import io
 import asyncio
+import os
 import httpx
 import ormsgpack
 
 VOICE_ID      = "fb95ab47841a4db189cb35fb619d4ea1"  # Scaramouche voice
 FISH_API_URL  = "https://api.fish.audio/v1/tts"
+ALLOW_GTTS_FALLBACK = (os.getenv("FISH_ALLOW_GTTS_FALLBACK", "").strip().lower() in {"1", "true", "yes", "on"})
 
 
 def _fish_tts_blocking(text: str, api_key: str, chunk_length: int = 220) -> bytes | None:
@@ -61,7 +63,14 @@ async def get_audio(text: str, fish_audio_key: str) -> bytes | None:
     if fish_audio_key:
         audio = await generate_tts_fish_audio(text, fish_audio_key)
         if audio: return audio
-    return await generate_tts_gtts(text)
+        print("[Fish Audio] Fish failed; refusing generic gTTS fallback")
+        if ALLOW_GTTS_FALLBACK:
+            return await generate_tts_gtts(text)
+        return None
+    print("[Fish Audio] FISH_AUDIO_API_KEY is not set; refusing generic gTTS fallback")
+    if ALLOW_GTTS_FALLBACK:
+        return await generate_tts_gtts(text)
+    return None
 
 
 def _style_tts_text(text: str, style: str = "guarded") -> str:
@@ -81,7 +90,10 @@ def _style_tts_text(text: str, style: str = "guarded") -> str:
 
 async def get_audio_mooded(text: str, fish_audio_key: str, mood: int = 0, style: str = "guarded") -> bytes | None:
     if not fish_audio_key:
-        return await generate_tts_gtts(text)
+        print("[Fish Audio] FISH_AUDIO_API_KEY is not set; refusing generic gTTS fallback")
+        if ALLOW_GTTS_FALLBACK:
+            return await generate_tts_gtts(text)
+        return None
     # Mood affects pacing
     if mood <= -6:   chunk = 140
     elif mood <= -1: chunk = 190
@@ -103,7 +115,12 @@ async def get_audio_mooded(text: str, fish_audio_key: str, mood: int = 0, style:
     try:
         audio = await asyncio.get_event_loop().run_in_executor(None, _blocking)
         if audio: return audio
-        return await generate_tts_gtts(text)
+        print("[Fish Audio] Fish failed; refusing generic gTTS fallback")
+        if ALLOW_GTTS_FALLBACK:
+            return await generate_tts_gtts(text)
+        return None
     except Exception as e:
         print(f"[Fish Mooded] {e}")
-        return await generate_tts_gtts(text)
+        if ALLOW_GTTS_FALLBACK:
+            return await generate_tts_gtts(text)
+        return None
