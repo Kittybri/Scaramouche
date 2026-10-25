@@ -1893,6 +1893,14 @@ async def on_message(message):
 
         content = message.content.strip()
         if not content: return
+        # Direct, explicit natural-language research (after partner and mute checks).
+        try:
+            from natural_research import maybe_handle_natural_research
+            if await maybe_handle_natural_research(message, BOT_NAME, bot.user.id, qai, mem, dm_channel_id):
+                return
+        except Exception as e:
+            log_error("natural_research", e)
+
 
         # Milestone / anniversary checks
         try:
@@ -3934,6 +3942,11 @@ async def on_command_error(ctx,error):
             await safe_reply(ctx,"You're missing something.")
         else: log_error("on_command_error",error)
     except: pass
+
+
+# Optional read-only research tools; bot-specific names prevent cross-bot command clashes.
+from research_commands import register as register_research_tools
+register_research_tools(bot, BOT_NAME, qai)
 
 if __name__=="__main__":
     if not DISCORD_TOKEN: raise SystemExit("❌ DISCORD_TOKEN not set")
