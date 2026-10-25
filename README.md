@@ -1,38 +1,53 @@
 <div align="center">
 
-<img src="assets/balladeer-banner-v2.webp" alt="Scaramouche in his in-game Balladeer attire, standing against a violet storm" width="100%">
+<img src="assets/balladeer-banner-v2.webp" alt="Scaramouche, the Balladeer" width="100%">
 
 # Scaramouche
 
-**The Balladeer · Sixth of the Fatui Harbingers**
+**A persistent conversational character bot for Discord**
 
-*Before the fall. Before the name was left behind.*
-
-</div>
-
----
-
-### About me
-
-I am Scaramouche, the Balladeer—Sixth of the Fatui Harbingers. The Electro Archon made me, then cast me aside. I have little patience for gods, empty devotion, or anyone foolish enough to mistake my attention for affection. I remember more than you might like.
-
-Speak to me in a Discord channel or in private. Bring a question, a story, an argument, or something you cannot quite say aloud. I might mock you. I might even answer. If I remember the conversation later, do try not to look so surprised.
-
-### In my company
-
-|  |  |
-| :-- | :-- |
-| **Conversation with memory** | Familiarity, grudges, trust, and shared history can develop over time. |
-| **Voice and media** | Voice replies, images, and videos give us more to talk about. |
-| **Scenes and games** | Roleplay, duels, dares, stories, and other diversions are available when conversation alone bores you. |
-| **A certain other self** | [Wanderer](https://github.com/Kittybri/Wanderer) exists in the same world. I have opinions about him. |
-
-<div align="center">
-
-*“Go on, then. Say something worth remembering.”*
-
-<sub>Fan-made Genshin Impact character bot for Discord. Not affiliated with HoYoverse.</sub>
-
-[Privacy policy](PRIVACY.md)
+Python orchestration, conversation memory, optional voice and media, and interaction with [Wanderer](https://github.com/Kittybri/Wanderer).
 
 </div>
+
+## Engineering overview
+
+This project explores how a character bot can retain conversational history and respond consistently while handling real Discord events and external AI services. The character is the interface; the engineering work includes routing, stored user state, response repetition controls, provider integration, and failure diagnosis.
+
+**Start here:** [architecture](docs/architecture.md) | [setup and tests](docs/quickstart.md) | [repair tasks](https://github.com/Kittybri/agent-repair-lab) | [contribution and AI assistance](https://github.com/Kittybri/agent-repair-lab/blob/main/CONTRIBUTIONS.md)
+
+## What to inspect
+
+| Area | Source or evidence |
+| --- | --- |
+| Event handling and commands | `bot.py` |
+| Persistent user and conversation state | `memory.py` |
+| Relationship context | `relationship_engine.py` |
+| Response repetition controls | `anti_repeat.py` and [offline tests](tests/test_anti_repeat.py) |
+| Optional voice output | `voice_handler.py` |
+| A real diagnosis and narrow repair | [PDF retrieval case study](https://github.com/Kittybri/agent-repair-lab/blob/main/docs/pdf-retrieval.md) |
+| Design tradeoffs and acceptance checks | [Turn ownership case study](https://github.com/Kittybri/agent-repair-lab/blob/main/docs/turn-ownership.md) |
+
+## Run the offline checks
+
+```sh
+python -m unittest discover -s tests -v
+```
+
+No Discord token or paid API is needed. GitHub Actions runs these checks on Python 3.11 and 3.12. They cover response-history isolation, bounded history, duplicate detection, and fresh fallback selection. They are not end-to-end bot or model-quality tests.
+
+For live setup, see [quickstart](docs/quickstart.md). For a reproducible, credential-free engineering demonstration, prepare a task in the separate [repair lab](https://github.com/Kittybri/agent-repair-lab).
+
+## Character experience
+
+Scaramouche is sharp, theatrical, and difficult to impress. Conversation, stories, games, persistent familiarity, and optional media give that personality a place to operate. The character's fictional claims are not technical guarantees about memory or model reliability.
+
+## Status and limitations
+
+The public branch and deployed releases have historically diverged. Case studies identify what was actually observed; repair tasks are simplified reproductions rather than full production snapshots. Provider-backed responses remain probabilistic. This project does not publish uptime claims, model rankings, or measured accuracy results.
+
+Development uses AI coding agents. Project direction and failure reports came from Abriana Meazzo; agents assisted implementation, diagnostics, tests, and documentation. See the linked contribution statement for the evidence boundaries.
+
+Fan-made Genshin Impact character project, not affiliated with HoYoverse. Character imagery and names belong to their respective owners.
+
+[Privacy policy](PRIVACY.md) | [Development notes](CONTRIBUTING.md)
