@@ -6,5 +6,13 @@
     "replacement": "RESTORATION_REVIEW.md; existing Unrestricted rename retained; Docs/Drive deferred to Phase 2; FaceProfiles enrollment/recognition/deletion remain, not an import/export equivalent.",
     "privacy_impact": "No Google credential/scope changes, no legacy bulk history replay or biometric import/export, no other-user birthday registration. Private legacy RPG dates/progress are not published into guessed guilds.",
     "validation": "Full suites, preservation negative cases, registration/import checks and staging evidence recorded in STAGING_VALIDATION.md."
+  },
+  {
+    "authorization": "Current user request: remove the voice-channel privacy/setup restrictions preventing automatic joining and listening.",
+    "removed_surfaces": ["Mandatory VOICE_ALLOWED_CHANNEL_IDS join gate"],
+    "reason": "An explicit join request failed solely because the user's current voice channel was absent from an environment allowlist.",
+    "replacement": "An explicit request joins the requester's current voice channel in the same server when Discord permissions and runtime dependencies allow it; participant handling remains automatic.",
+    "privacy_impact": "Broadens eligible voice channels. The public transcription notice, optional per-user opt-out, cancellation, and delivered-memory protections remain intact; no other-user state is changed.",
+    "validation": "Voice join/note regressions, preservation manifests, and complete suite before deployment."
   }
 ]

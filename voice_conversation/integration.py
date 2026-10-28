@@ -6,7 +6,6 @@ import asyncio
 import contextlib
 import json
 import io
-import os
 import shutil
 import random
 import re
@@ -33,11 +32,6 @@ class VoiceConversation:
         self.lock = None
         self.greeting_tasks = {}
         self.arrivals_seen = {}
-        self.allowed = frozenset(
-            int(x)
-            for x in os.getenv("VOICE_ALLOWED_CHANNEL_IDS", "").split(",")
-            if x.strip().isdigit()
-        )
 
     def install(self):
         self.bot.add_listener(self.voice_state, "on_voice_state_update")
@@ -210,7 +204,7 @@ class VoiceConversation:
         if not session:
             await self.send(
                 ctx,
-                "Live voice: inactive. Use `!voice start scaramouche` or `!voice start wanderer` in an allowed VC. "
+                "Live voice: inactive. Join a server VC, then ask me to join or use `!voice start`. "
                 "Listening is automatic for humans with voice enabled.",
             )
             return
@@ -331,13 +325,10 @@ class VoiceConversation:
                     ),
                 )
             return
-        temporary = self.features.games.temporary_channels if self.features else set()
-        if not channel or (
-            channel.id not in self.allowed and channel.id not in temporary
-        ):
+        if not channel:
             await self.send(
                 ctx,
-                "Join a VC explicitly listed in VOICE_ALLOWED_CHANNEL_IDS first. Listening is disabled elsewhere.",
+                "Join a voice channel in this server first, then ask me to join you.",
             )
             return
         if action in {"start", "join"}:
@@ -470,9 +461,9 @@ class VoiceConversation:
                     "Live voice could not start. Check the pinned receive dependencies, Opus/FFmpeg, DAVE and permissions. Text and voice notes are unaffected.",
                 )
             return
-        if not session or not session.active or channel.id != session.channel_id:
+        if not session or not session.active or not channel or channel.id != session.channel_id:
             await self.send(
-                ctx, "Start a session in your allowed VC first: `!voice start`."
+                ctx, "Start a session in your current server VC first: `!voice start`."
             )
             return
         if (

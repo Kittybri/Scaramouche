@@ -50,7 +50,7 @@ def test_bad_target_and_dm_cannot_start():
 def test_slash_defers_and_reuses_original_user_and_guards(action):
     async def run():
         bot, service, controller = setup()
-        # Real handle rejects users outside the allowed VC and unauthorized stops.
+        # Real handle requires the requester to be in a VC and rejects unauthorized stops.
         interaction = NS(user=NS(id=2, guild_permissions=NS(manage_guild=False), voice=None),
             guild=NS(id=5), channel=NS(id=8),
             response=NS(defer=AsyncMock()), followup=NS(send=AsyncMock()))
@@ -62,7 +62,7 @@ def test_slash_defers_and_reuses_original_user_and_guards(action):
         assert result.kwargs["ephemeral"] is True
         assert not result.kwargs["allowed_mentions"].everyone
         assert "mention_author" not in result.kwargs
-        assert ("Join a VC" if action == "join" else "session initiator") in result.args[0]
+        assert ("Join a voice channel" if action == "join" else "session initiator") in result.args[0]
         assert not service.sessions
         await bot.close()
     asyncio.run(run())
@@ -109,7 +109,6 @@ def test_natural_request_joins_only_named_bot(name, utterance, monkeypatch):
     async def run():
         bot, service, controller = setup(name)
         channel = NS(id=10)
-        service.allowed = frozenset({10})
         author = NS(id=2, bot=False, voice=NS(channel=channel))
         guild = NS(id=5)
         message = NS(content=utterance, author=author, guild=guild, attachments=[], reply=AsyncMock())
@@ -148,7 +147,6 @@ def test_voice_note_uses_short_transcript_and_existing_guard(monkeypatch):
     async def run():
         bot, service, controller = setup("wanderer")
         service.mem.get_user_preferences = AsyncMock(return_value={"voice_enabled": True})
-        service.allowed = frozenset({10})
         audio = NS(is_voice_message=lambda: True, duration=3, size=4000, read=AsyncMock(return_value=b"OggSfake"))
         author = NS(id=2, bot=False, voice=NS(channel=NS(id=10)))
         message = NS(content="", author=author, guild=NS(id=5), attachments=[audio], reply=AsyncMock())
@@ -162,7 +160,7 @@ def test_voice_note_uses_short_transcript_and_existing_guard(monkeypatch):
 
         service.command.reset_mock()
         service.sessions.clear()
-        message.author.voice.channel.id = 99
+        message.author.voice.channel = None
         assert not await controller.maybe_join(message, ctx)
         service.command.assert_not_awaited()
         assert controller._transcribe_note.await_count == 1
@@ -184,7 +182,6 @@ def test_voice_note_rejects_long_or_large_audio_before_download():
 def test_voice_note_opted_out_is_not_transcribed():
     async def run():
         bot, service, controller = setup("wanderer")
-        service.allowed = frozenset({10})
         service.mem.get_user_preferences = AsyncMock(return_value={"voice_enabled": False})
         author = NS(id=2, bot=False, voice=NS(channel=NS(id=10)))
         audio = NS(is_voice_message=lambda: True)
@@ -200,7 +197,6 @@ def test_voice_note_opted_out_is_not_transcribed():
 def test_other_bot_join_request_is_consumed_without_reply(as_note):
     async def run():
         bot, service, controller = setup("scaramouche")
-        service.allowed = frozenset({10})
         service.mem.get_user_preferences = AsyncMock(return_value={"voice_enabled": True})
         author = NS(id=2, bot=False, voice=NS(channel=NS(id=10)))
         audio = NS(is_voice_message=lambda: True)
@@ -252,7 +248,6 @@ def test_voice_note_sensitive_transcript_never_joins(transcript):
     async def run():
         bot, service, controller = setup("wanderer")
         service.mem.get_user_preferences = AsyncMock(return_value={"voice_enabled": True})
-        service.allowed = frozenset({10})
         author = NS(id=2, bot=False, voice=NS(channel=NS(id=10)))
         audio = NS(is_voice_message=lambda: True)
         message = NS(content="", author=author, guild=NS(id=5), attachments=[audio], reply=AsyncMock())
@@ -267,12 +262,11 @@ def test_voice_note_sensitive_transcript_never_joins(transcript):
 def test_natural_join_failure_does_not_claim_presence():
     async def run():
         bot, service, controller = setup("scaramouche")
-        service.allowed = frozenset({10})
-        author = NS(id=2, bot=False, voice=NS(channel=NS(id=99)), guild_permissions=NS(manage_guild=False))
+        author = NS(id=2, bot=False, voice=NS(channel=None), guild_permissions=NS(manage_guild=False))
         message = NS(content="Scara join voice chat", author=author, guild=NS(id=5), attachments=[], reply=AsyncMock())
         ctx = NS(author=author, guild=message.guild, reply=AsyncMock())
         assert await controller.maybe_join(message, ctx)
-        assert "Join a VC" in ctx.reply.call_args.args[0]
+        assert "Join a voice channel" in ctx.reply.call_args.args[0]
         message.reply.assert_not_awaited()
         assert not service.sessions
         await bot.close()
