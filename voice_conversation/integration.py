@@ -50,7 +50,7 @@ class VoiceConversation:
         for gid in list(self.sessions):
             await self.leave(gid)
 
-    async def leave(self, gid):
+    async def leave(self, gid, *, announce=True):
         tasks = [task for (guild_id, _), task in self.greeting_tasks.items() if guild_id == gid]
         for task in tasks:
             task.cancel()
@@ -63,16 +63,43 @@ class VoiceConversation:
             await session.stop()
             with contextlib.suppress(Exception):
                 await session.backend.vc.disconnect(force=True)
-            with contextlib.suppress(Exception):
-                await channel.send(
-                    "Live voice ended. Listening and temporary audio buffers cleared.",
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
+            if announce:
+                with contextlib.suppress(Exception):
+                    await channel.send(
+                        "Live voice ended. Listening and temporary audio buffers cleared.",
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+
+    async def spoken_leave(self, gid, session, uid):
+        """Finish one in-character farewell before disconnecting the voice client."""
+        if self.sessions.get(gid) is not session:
+            return
+        lines = (
+            (
+                "Tch. I've heard enough. Try surviving without me.",
+                "Fine. I'll leave you to your charming company.",
+                "I'm going. Don't make a scene over it.",
+            )
+            if self.name.lower() == "scaramouche"
+            else (
+                "I'm leaving. Try not to make a spectacle of it.",
+                "Fine. You can have the room to yourself.",
+                "I'll go. Don't mistake that for obedience.",
+            )
+        )
+        try:
+            await session.cancel_response()
+            if session.active and uid in session.participants:
+                if await session.submit(uid, "", reply=random.choice(lines)):
+                    await asyncio.gather(session.response_task, return_exceptions=True)
+        finally:
+            if self.sessions.get(gid) is session:
+                await self.leave(gid, announce=False)
 
     async def voice_state(self, member, before, after):
         if self.features:
-            # A social-feature DB failure must never prevent receive consent
-            # being revoked or the foundation disconnecting a moved bot.
+            # A social-feature DB failure must never prevent a participant's
+            # departure or the foundation disconnecting a moved bot.
             with contextlib.suppress(Exception):
                 await self.features.voice_state(member, before, after)
         session = self.sessions.get(member.guild.id)
@@ -107,19 +134,10 @@ class VoiceConversation:
         if member.id in session.participants:
             return False
         epoch = getattr(session, "epochs", {}).get(member.id, 0)
-        prefs = await self.mem.get_user_preferences(member.id)
-        if not prefs.get("voice_enabled", True):
-            return False
         if len(session.participants) >= session.limits.participants:
             return False
-        if announce:
-            await session.backend.vc.channel.send(
-                "Live voice is active here: human speech is sent to Groq for transcription "
-                "and relevant conversation uses bot memory. Raw audio is not saved. "
-                "No opt-in command is needed. Your `!voice off` preference still disables listening.",
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-        # A leave/stop can occur while preferences or the notice are awaited.
+        # A leave/stop still invalidates enrollment, even though no notice or
+        # per-user voice preference is required for live channel listening.
         if (
             not session.active
             or getattr(session, "epochs", {}).get(member.id, 0) != epoch
@@ -205,7 +223,7 @@ class VoiceConversation:
             await self.send(
                 ctx,
                 "Live voice: inactive. Join a server VC, then ask me to join or use `!voice start`. "
-                "Listening is automatic for humans with voice enabled.",
+                "Listening is automatic for humans in the VC.",
             )
             return
         info = session.status()
@@ -239,10 +257,11 @@ class VoiceConversation:
                     return True
                 parts = parts[:1]
                 value = parts[0]
-        if value == "off" and ctx.guild:
-            session = self.sessions.get(ctx.guild.id)
-            if session:
-                session.consent(ctx.author.id, False)
+        # Preserve the old emergency stop gesture, but it now ends the whole
+        # live session instead of changing a persistent per-person VC setting.
+        if value == "off" and ctx.guild and self.sessions.get(ctx.guild.id):
+            parts = ["stop"]
+            value = "stop"
         if value == "status":
             # Add diagnostics, then allow the legacy voice-note status to run.
             await self.status(ctx)
@@ -279,7 +298,10 @@ class VoiceConversation:
             ctx.author.id == self.owner_id or ctx.author.guild_permissions.manage_guild
         )
         if action in {"stop", "leave"}:
-            if session and (admin or ctx.author.id == session.initiator):
+            in_session_channel = bool(channel and session and channel.id == session.channel_id)
+            if not session:
+                await self.send(ctx, "I'm not in a voice channel right now.")
+            elif admin or ctx.author.id == session.initiator or in_session_channel:
                 await self.leave(ctx.guild.id)
                 await self.send(
                     ctx,
@@ -288,7 +310,7 @@ class VoiceConversation:
             else:
                 await self.send(
                     ctx,
-                    "Only the session initiator or a server manager can end the session. Your `!voice off` preference disables listening.",
+                    "Anyone in my current VC, the session starter, or a server manager can ask me to leave.",
                 )
             return
         if action == "diagnostics":
@@ -338,13 +360,6 @@ class VoiceConversation:
                     "A voice connection/session already exists, or the session limit is reached. End it before starting another.",
                 )
                 return
-            prefs = await self.mem.get_user_preferences(ctx.author.id)
-            if not prefs.get("voice_enabled", True):
-                await self.send(
-                    ctx,
-                    "Your voice preference is off. Enable `!voice on` before starting live voice.",
-                )
-                return
             permissions = channel.permissions_for(ctx.guild.me)
             if (
                 not permissions.connect
@@ -367,13 +382,6 @@ class VoiceConversation:
             vc = None
             try:
                 client_class = backend.client_class()
-                # Public notice in the VC's own text chat, not a possibly private invocation channel.
-                await channel.send(
-                    "Live voice conversation is starting. Speech is sent to Groq for transcription; relevant conversation follows ordinary bot memory rules. No raw recording is saved. "
-                    + "Humans in this channel are heard automatically; no per-session enrollment command is needed. Your `!voice off` preference disables listening. "
-                    + "Stop: `!voice stop`.",
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
                 vc = await channel.connect(cls=client_class, self_deaf=False)
 
                 async def respond(uid, text, extra):
@@ -399,8 +407,6 @@ class VoiceConversation:
 
                 async def synthesize(uid, text):
                     user = await self.mem.get_user(uid) or {}
-                    if not user.get("voice_enabled", True):
-                        return None
                     return await self.tts(
                         text, user.get("mood", 0), user, voice_key=uid
                     )
@@ -436,6 +442,7 @@ class VoiceConversation:
                     synthesize=synthesize,
                     remember=remember,
                     notify=notify,
+                    on_spoken_leave=lambda uid: self.spoken_leave(ctx.guild.id, session, uid),
                     limits=Limits.from_env(),
                 )
                 session.consent(ctx.author.id, True)

@@ -91,8 +91,8 @@ No production configuration or permissions are changed by this branch.
 | `!vcgame status` / `help` | Your active games or syntax |
 
 Party-game opt-in remains separate from ordinary voice conversation. Eligible
-humans in an active voice session are listened to automatically after the visible
-transcription notice, while persistent game consent still requires both master
+humans in an active voice session are listened to automatically; the foundation's
+Groq/memory disclosure is in `FULL_DUPLEX_VOICE.md`, not Discord. Persistent game consent still requires both master
 and specific preferences. An explicit self-invitation or matching `accept`
 provides one-time game consent instead. Nobody can accept on another person's
 behalf, and a manager's authority to invite does not grant game consent.

@@ -14,5 +14,13 @@
     "replacement": "An explicit request joins the requester's current voice channel in the same server when Discord permissions and runtime dependencies allow it; participant handling remains automatic.",
     "privacy_impact": "Broadens eligible voice channels. The public transcription notice, optional per-user opt-out, cancellation, and delivered-memory protections remain intact; no other-user state is changed.",
     "validation": "Voice join/note regressions, preservation manifests, and complete suite before deployment."
+  },
+  {
+    "authorization": "Current user explicitly requested removal of Discord voice transcription notices and live-VC !voice off controls, with disclosure on GitHub and text leave requests as the stop path.",
+    "removed_surfaces": ["Discord live-voice startup/arrival transcription notices", "Live-VC voice_enabled preference gate and !voice off per-person removal"],
+    "reason": "The owner wants automatic live listening without Discord privacy/settings prompts and a plain-text way for participants to make either bot leave.",
+    "replacement": "FULL_DUPLEX_VOICE.md carries the Groq/memory disclosure; any participant in the bot's VC can issue a direct natural-language text or existing command leave request. The exact spoken phrase '[bot name] leave voice channel' plays one farewell and then ends the session. The old !voice off gesture also ends an active session; voice-note preferences remain separate outside sessions.",
+    "privacy_impact": "Other humans in a VC are automatically transcribed without a Discord disclosure or per-person live opt-out. Leaving/muting the VC or asking the bot to leave stops further capture; existing stored voice-off preferences no longer apply to live VC. No raw audio persistence or deletion semantics changed.",
+    "validation": "Natural leave targeting/permission tests, exact spoken phrase and farewell/playback tests, no-notice and preference-independence tests, preservation checks, and complete suites before deployment."
   }
 ]
