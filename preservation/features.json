@@ -174,16 +174,22 @@
     "voice": {
       "status": "PRESENT",
       "prefix": [
+        "join",
+        "leave",
         "voice",
         "vcparty",
         "vcgame"
       ],
       "wiring": [
         "VOICE_CONVERSATION.command",
+        "VOICE_COMMANDS.ready",
+        "VOICE_COMMANDS.slash",
         "VOICE_CONVERSATION.voice_state"
       ],
       "callable": [
         "VOICE_CONVERSATION.command",
+        "VOICE_COMMANDS.ready",
+        "VOICE_COMMANDS.slash",
         "VOICE_CONVERSATION.voice_state"
       ],
       "privacy_stages": [
