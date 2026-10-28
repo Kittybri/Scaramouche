@@ -8,6 +8,7 @@ import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 import discord
+from discord import app_commands
 from discord.ext import commands
 import pytest
 from preservation_contract import inventory, validate, removal_errors, load, CLASSES
@@ -191,6 +192,9 @@ async def test_owner_dm_failure_never_leaks_status():
 async def test_help_catalog_is_paginated_and_does_not_expose_owner_commands():
     bot = commands.Bot(command_prefix="!", intents=discord.Intents.none())
     async def callback(ctx): pass
+    @app_commands.command(name="sample", description="Registered slash command")
+    async def sample(interaction: discord.Interaction): pass
+    bot.tree.add_command(sample)
     for i in range(45):
         bot.add_command(commands.Command(callback,name=f"public{i}",aliases=[f"p{i}"]))
     bot.add_command(commands.Command(callback,name="build"))
@@ -200,6 +204,9 @@ async def test_help_catalog_is_paginated_and_does_not_expose_owner_commands():
     embeds = [e for c in ctx.send.call_args_list for e in c.kwargs.get("embeds",[])]
     all_text = json.dumps([e.to_dict() for e in embeds])
     assert "!build" not in all_text and "!public44" in all_text and "!p44" in all_text
+    assert bot.tree.get_command("sample") is sample
+    assert not any(e.title == "Slash command index" for e in embeds)
+    assert "/sample" not in all_text
     assert all(len(e.fields) <= 25 and len(e) <= 6000 for e in embeds)
     assert all(sum(len(e) for e in c.kwargs["embeds"]) <= 6000 for c in ctx.send.call_args_list)
     await bot.close()

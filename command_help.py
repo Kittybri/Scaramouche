@@ -24,7 +24,4 @@ def public_catalog(bot):
         for name, value in rows[index:index+20]:
             page.add_field(name=name, value=value, inline=False)
         pages.append(page)
-    slash = sorted(command.qualified_name for command in bot.tree.walk_commands() if not hasattr(command, "commands"))
-    if slash:
-        pages.append(discord.Embed(title="Slash command index", description="\n".join("/" + name for name in slash)))
     return pages
