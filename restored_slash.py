@@ -16,10 +16,11 @@ log=logging.getLogger(__name__)
 
 
 class RestoredSlash:
-    ROOTS=('scaramouche','dashboard','world','prefs','duo')
-    def __init__(self,bot,mem,privacy,secret,archive,setup,respond,delivered):
+    ROOTS=('scaramouche','dashboard','world','prefs','duo','weatherlocation')
+    def __init__(self,bot,mem,privacy,secret,archive,setup,respond,delivered,world=None,weather_location=None):
         self.bot,self.mem,self.privacy,self.secret=bot,mem,privacy,secret
         self.archive,self.setup,self.respond,self.delivered=archive,setup,respond,delivered
+        self.world,self.weather_location=world,weather_location
         self.active={}
         self.synced=False
 
@@ -50,6 +51,13 @@ class RestoredSlash:
                 await ctx.send(await self.archive.read(i.user.id,i.channel_id,name),ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
             elif name=='worldadd':
                 await ctx.send(await self.archive.add(i.user.id,i.channel_id,kwargs['entity_type'],text),ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
+            elif name=='worldprefs':
+                await ctx.send(await self.world.preferences(i.user.id,kwargs['setting'],kwargs['value']),
+                               ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
+            elif name=='weatherlocation':
+                await self.setup(ctx)
+                await ctx.send(await self.weather_location(i.user.id,text or None),
+                               ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
             elif name=='scaramouche':
                 user=await self.setup(ctx)
                 answer=await self.respond(i.user.id,i.channel_id,text,user,i.user.display_name,i.user.mention,
@@ -99,6 +107,9 @@ class RestoredSlash:
     def install(self):
         @self.bot.tree.command(name='scaramouche',description='Talk directly to Scaramouche.')
         async def scaramouche(i: discord.Interaction,message: str): await self.invoke(i,'scaramouche',message)
+        @self.bot.tree.command(name='weatherlocation',description='Set, clear, or check your weather location privately.')
+        async def weatherlocation(i: discord.Interaction,location: str=''):
+            await self.invoke(i,'weatherlocation',location)
         dashboard=app_commands.Group(name='dashboard',description='Your relationship, achievements, and scene continuity.')
         for name in ('relationship','arc','duostate','scene','achievements'):
             def make(name):
@@ -113,6 +124,11 @@ class RestoredSlash:
         @world.command(name='add',description='Remember your own story-world entry in this channel.')
         async def add(i: discord.Interaction,entity_type: Literal['enemy','ally','gift','place','prop','faction','figure','case'],name: str,summary: str=''):
             await self.invoke(i,'worldadd',name+' | '+summary,entity_type=entity_type)
+        @world.command(name='prefs',description='Manage your grudge and lullaby world settings privately.')
+        async def world_prefs(i: discord.Interaction,
+                              setting: Literal['status','grudges','lullaby','lullaby_hour']='status',
+                              value: str=''):
+            await self.invoke(i,'worldprefs',setting+' '+value,setting=setting,value=value)
         prefs=app_commands.Group(name='prefs',description='Voice, utility, duo and speaker preferences.')
         @prefs.command(name='voice',description='Set voice-note replies; not voice-channel enrollment.')
         async def voice(i: discord.Interaction,mode: Literal['on','off','status']): await self.invoke(i,'pref_voice',mode=mode)

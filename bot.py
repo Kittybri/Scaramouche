@@ -5289,20 +5289,22 @@ async def weather_cmd(ctx,*,location:str=None):
 @bot.command(name="weatherlocation", aliases=["setweather"])
 async def weatherlocation_cmd(ctx, *, location: str = None):
     await _setup(ctx)
+    await safe_reply(ctx, await weather_location_text(ctx.author.id, location))
+
+
+async def weather_location_text(user_id: int, location: str = None) -> str:
+    """Shared implementation for the prefix and private slash weather setting."""
     if not location:
-        user = await mem.get_user(ctx.author.id)
+        user = await mem.get_user(user_id)
         current = (user or {}).get("weather_location") or "not configured"
-        await safe_reply(ctx, f"Weather location: **{current}**. Use `!weatherlocation City, ST` or `!weatherlocation off`.")
-        return
+        return f"Weather location: **{current}**. Use /weatherlocation with a city or `off`."
     if location.strip().casefold() in {"off", "none", "clear"}:
-        await mem.set_weather_location(ctx.author.id, "")
-        await safe_reply(ctx, "Weather comments disabled. I wasn't watching the sky for you anyway.")
-        return
+        await mem.set_weather_location(user_id, "")
+        return "Weather comments disabled. I wasn't watching the sky for you anyway."
     if not await _resolve_weather_location(location):
-        await safe_reply(ctx, "I couldn't resolve that location. Use `City, ST`, a ZIP code, or `lat,lon`.")
-        return
-    await mem.set_weather_location(ctx.author.id, location.strip())
-    await safe_reply(ctx, "Fine. I'll notice when the weather becomes worth mentioning.")
+        return "I couldn't resolve that location. Use `City, ST`, a ZIP code, or `lat,lon`."
+    await mem.set_weather_location(user_id, location.strip())
+    return "Fine. I'll notice when the weather becomes worth mentioning."
 
 
 @bot.command(name="popquiz")
@@ -6626,7 +6628,7 @@ async def help_cmd(ctx):
             ("🗡️ !rival @user","Designate a rival"),
             ("⏰ !remind <mins> <txt>","Reminder with disdain"),
             ("🌤️ !weather <city>","Weather + contemptuous commentary"),
-            ("✨ New bits","`!weatherlocation <city|off>` · `!popquiz` · admin: `!fakewipe`, `!scaratimeout`, `!scaraslowmode`"),
+            ("✨ New bits","`/weatherlocation [city|off]` · `!popquiz` · admin: `!fakewipe`, `!scaratimeout`, `!scaraslowmode`"),
             ("📢 !poll <question>","He demands a vote"),
             ("📋 !summarize","Recent chat summary with contempt"),
             ("🔇 !mute [@user] [min]","Ignores someone in character"),
@@ -6794,7 +6796,8 @@ from world_archive import WorldArchive
 WORLD_ARCHIVE = WorldArchive(bot, mem, HARBINGER.guard).install()
 from restored_slash import RestoredSlash
 RESTORED_SLASH = RestoredSlash(bot, mem, PRIVACY_DELETION, credential_disclosure,
-    WORLD_ARCHIVE, _setup, get_response, _record_delivered_reply).install()
+    WORLD_ARCHIVE, _setup, get_response, _record_delivered_reply,
+    WORLD, weather_location_text).install()
 PRIVACY_DELETION.stages = {"restored_slash": RESTORED_SLASH.forget, **PRIVACY_DELETION.stages}
 PROVIDER_STATUS = ProviderStatus(bot, BOT_NAME, ai, OWNER_ID, environment_monitor).install()
 

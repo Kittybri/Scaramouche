@@ -46,5 +46,13 @@
     "replacement": "Keep all home subcommands registered and callable. !home sends a user-bound DM panel with connection information, personal settings, location, output, device-action, exact-confirmation, and speak controls.",
     "privacy_impact": "Home state and controls move to DM presentation. The panel uses guild_id=0 even when requested from a guild, so stale DM buttons cannot borrow guild-scoped device access; backend permissions, device policies, user scope, and exact-action confirmation remain enforced.",
     "validation": "Home panel authorization and callback tests, command registration/help-manifest tests, preservation diff check, and complete suite before deployment."
+  },
+  {
+    "authorization": "Current user request showing weatherlocation and world prefix rows: these should be slash commands.",
+    "removed_surfaces": ["help:!weatherlocation", "help:!setweather", "help:!world", "help:!worldadd", "help:!worldprefs"],
+    "reason": "Move the visible world/weather settings workflow into Discord's native slash picker without a duplicate prefix-help list.",
+    "replacement": "Scaramouche already had /world state and /world add. Add /world prefs and /weatherlocation; preserve the old prefix commands and alias as callable compatibility paths.",
+    "privacy_impact": "Weather location and world preferences use private slash responses. Prefix behavior, user ownership, and deletion boundaries remain intact.",
+    "validation": "Slash registration and behavior tests, runtime preservation manifest and diff checks, full suites, and live staging slash-registration inspection."
   }
 ]
