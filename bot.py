@@ -4579,7 +4579,10 @@ async def _do_tedtalk(ctx, attachment, topic, msg_id=None):
                 max_study_file_bytes = 20 * 1024 * 1024
                 if attachment.size and attachment.size > max_study_file_bytes:
                     await ctx.send("That file is too large. Keep study files under 20 MB."); return
-                file_bytes = await asyncio.wait_for(attachment.read(use_cached=True), timeout=30)
+                try:
+                    file_bytes = await asyncio.wait_for(attachment.read(), timeout=30)
+                except discord.HTTPException:
+                    file_bytes = await asyncio.wait_for(attachment.read(use_cached=True), timeout=30)
                 if len(file_bytes) > max_study_file_bytes:
                     await ctx.send("That file is too large. Keep study files under 20 MB."); return
             except Exception as e:

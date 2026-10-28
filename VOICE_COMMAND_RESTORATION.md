@@ -31,5 +31,11 @@ Alternatively select the intended application's /join.
 Use !leave with an optional character name, or that application's /leave.
 The existing !voice start / stop / diagnostics commands continue to work.
 
+Deployment preflight discovered an existing live-only study attachment fix:
+try the original attachment URL, then fall back to the cached URL on Discord
+HTTP failure. The initial deployment stopped before any service changes.
+That exact existing fix and its live PyPDF2==3.0.1 requirements entry are preserved
+in this candidate to avoid reverting live behavior; they are not a new attachment
+feature or a voice-engine modification. The deployment reuses the existing venv.
 Deployment evidence will be appended after verifying the live registrations.
 
