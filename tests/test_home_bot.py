@@ -11,6 +11,8 @@ from discord.ext import commands
 import pytest
 
 from home.bot_integration import HomeBot, quiet
+from home.menu import HomeMenu, HomeSettings, ConfirmAction, ActionModal
+from command_help import public_catalog
 from home.protocol import command, Rejected
 
 
@@ -102,6 +104,70 @@ def test_commands_register_and_owner_diagnostics_stay_private():
             await bot.get_command("home " + op).callback(ctx)
             assert home.client.call.call_args.args == (op, 1)
         await bot.close()
+
+    run(check())
+
+
+def test_home_is_the_only_public_help_entry_and_subcommands_still_work():
+    async def check():
+        bot = commands.Bot(command_prefix="!", intents=discord.Intents.none())
+        mem = NS(get_user_preferences=AsyncMock(return_value={}))
+        home = HomeBot("scaramouche", bot, mem, {}, AsyncMock(), owner_id=1)
+        home.install()
+        labels = [field.name for page in public_catalog(bot) for field in page.fields]
+        assert "!home" in labels
+        assert all(not label.startswith("!home ") for label in labels)
+        for name in ("actions", "alarms", "confirm", "do", "location", "output", "speak"):
+            assert bot.get_command("home " + name) is not None
+        author = NS(id=2, send=AsyncMock())
+        ctx = NS(author=author, guild=NS(id=9), reply=AsyncMock())
+        await bot.get_command("home").callback(ctx)
+        assert author.send.await_count == 1
+        panel = author.send.call_args.kwargs
+        assert isinstance(panel["view"], HomeMenu)
+        assert panel["view"].user_id == 2 and panel["view"].guild_id == 0
+        assert ctx.reply.call_args.args[0] == "Home controls sent privately."
+        await bot.close()
+
+    run(check())
+
+
+def test_home_panel_is_user_bound_and_confirmation_remains_explicit():
+    async def check():
+        mem = NS(get_user_preferences=AsyncMock(return_value={}))
+        home = HomeBot("scaramouche", NS(), mem, {}, AsyncMock())
+        home.client.call = AsyncMock(return_value={"ok": True, "result": "completed"})
+        wrong_response = NS(send_message=AsyncMock())
+        menu = HomeMenu(home, 1, 9)
+        assert not await menu.interaction_check(NS(user=NS(id=2), response=wrong_response))
+        assert "someone else" in wrong_response.send_message.call_args.args[0]
+        home.client.call.assert_not_awaited()
+        settings = HomeSettings(home, 1, 9)
+        delete_button = next(item for item in settings.children if item.label == "Delete location data")
+        response = NS(edit_message=AsyncMock(), defer=AsyncMock())
+        await delete_button.callback(NS(user=NS(id=1), response=response))
+        assert response.edit_message.call_args.kwargs["view"].__class__.__name__ == "ConfirmLocationDelete"
+        home.client.call.assert_not_awaited()
+        confirm = ConfirmAction(home, 1, 9, "a" * 32)
+        confirm_button = next(item for item in confirm.children if item.label == "Confirm exact action")
+        await confirm_button.callback(NS(user=NS(id=1), response=response, edit_original_response=AsyncMock()))
+        assert home.client.call.call_args.args == ("confirm", 1)
+        assert home.client.call.call_args.kwargs["guild_id"] == 9
+        assert home.client.call.call_args.kwargs["request_id"] == "a" * 32
+        modal = ActionModal(home, 1, 9)
+        home.action = AsyncMock(return_value={"confirmation_required": "b" * 32})
+        await modal.on_submit(NS(user=NS(id=2), response=wrong_response))
+        home.action.assert_not_awaited()
+        modal.device._value = "lamp"
+        modal.action._value = "power"
+        modal.parameters._value = '{"on": true}'
+        ok_response = NS(send_message=AsyncMock(), defer=AsyncMock())
+        ok_interaction = NS(user=NS(id=1), response=ok_response, edit_original_response=AsyncMock())
+        await modal.on_submit(ok_interaction)
+        assert home.action.call_args.args == (1, 9, "lamp", "power", {"on": True})
+        assert ok_response.defer.await_count == 1
+        assert isinstance(ok_interaction.edit_original_response.call_args.kwargs["view"], ConfirmAction)
+        assert "lamp" in ok_interaction.edit_original_response.call_args.kwargs["content"]
 
     run(check())
 
