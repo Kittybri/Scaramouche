@@ -16,9 +16,9 @@ log = logging.getLogger(__name__)
 VOICE_HELP = (
     "Live voice: `!join [scaramouche|wanderer]` (alias `!listen`) or `/join`. "
     "End with `!leave [scaramouche|wanderer]` or `/leave`. "
-    "Join an enabled server VC first; choose the bot's app for slash commands. "
+    "Join a server VC first; choose the bot's app for slash commands. "
     "You can also say 'Scara, join voice chat' or 'Wanderer, join the voice channel' "
-    "in text or a short Discord voice note while you are in an enabled VC. "
+    "in text or a short Discord voice note while you are in a VC. "
     "Existing `!voice start`, `!voice stop` and `!voice diagnostics` still work."
 )
 
@@ -90,8 +90,7 @@ class VoiceCommands:
             if self.service.sessions.get(message.guild.id):
                 return False
             channel = getattr(getattr(message.author, "voice", None), "channel", None)
-            temporary = self.service.features.games.temporary_channels if self.service.features else set()
-            if not channel or channel.id not in self.service.allowed | temporary:
+            if not channel:
                 return False
             prefs = await self.service.mem.get_user_preferences(message.author.id)
             if not prefs.get("voice_enabled", True):

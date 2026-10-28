@@ -56,10 +56,10 @@ Add an `advanced_vc` section to the existing `BOT_INTEGRATIONS_CONFIG` JSON file
 ```
 
 Absent guilds, flags and all five personal preferences default OFF. Session
-Mockingbird mode also starts OFF. Configure the same regular VC in the foundation's
-`VOICE_ALLOWED_CHANNEL_IDS`; advanced configuration alone cannot enable receiving.
-Game-created rooms are narrowly registered as temporary allowlisted rooms only for
-the accepted game. Both bots need the same **physical shared-state SQLite file** for
+Mockingbird mode also starts OFF. The foundation has no channel-ID allowlist;
+an explicit join request in a server VC starts ordinary receiving. Advanced games
+still require their separate guild/channel opt-in; game-created rooms remain scoped
+to the accepted game. Both bots need the same **physical shared-state SQLite file** for
 duo handoffs, cooldowns and the one-game-per-guild gate. Separate copies do not work.
 Use the existing deployment data-directory arrangement; this adds no database.
 

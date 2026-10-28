@@ -57,8 +57,9 @@ Install system FFmpeg and libopus (for example the distribution's `ffmpeg` and
 to the absolute path of its trusted shared library. Do not install py-cord alongside
 discord.py: the adapter detects and rejects that conflicting installation.
 
-Set `VOICE_ALLOWED_CHANNEL_IDS` to a comma-separated allowlist of VC IDs. Empty
-means disabled. Configure the existing `GROQ_API_KEY`, Discord token and Fish
+No channel-ID allowlist or per-session enrollment setting is required. A bot joins
+the requester's current server VC after an explicit join request, if Discord grants
+View Channel, Connect and Speak. Configure the existing `GROQ_API_KEY`, Discord token and Fish
 credentials normally; never paste credentials into chat. Grant View Channel,
 Connect, Speak and Send Messages in the VC's text chat. Each session needs a
 public transcription notice there before the bot connects/listens.
@@ -90,7 +91,7 @@ The bounded participant limit and stored `!voice off` preference remain enforced
 | `!voice diagnostics` | Owner-only DM attachment with sanitized metrics/events |
 
 Session-wide mode changes require initiator/server-manager authority. Owner status
-does not bypass channel restrictions or another person's voice preference. `!voice on/off`
+does not bypass Discord permissions or another person's voice preference. `!voice on/off`
 retains voice-note preferences; `off` also removes that user from live listening.
 Ordinary `!voice some text`, `!speak` and `!say` still use existing voice-note behavior.
 Session participation resets on stop, channel move/deletion, or disconnect.

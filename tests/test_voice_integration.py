@@ -16,8 +16,11 @@ from voice_conversation.speech import GroqSTT
 from voice_conversation.smoke import evaluate
 
 
-def setup(monkeypatch):
-    monkeypatch.setenv("VOICE_ALLOWED_CHANNEL_IDS", "10")
+def setup(monkeypatch, allowed_env=None):
+    if allowed_env is None:
+        monkeypatch.delenv("VOICE_ALLOWED_CHANNEL_IDS", raising=False)
+    else:
+        monkeypatch.setenv("VOICE_ALLOWED_CHANNEL_IDS", allowed_env)
     bot = commands.Bot(command_prefix="!", intents=discord.Intents.none())
     mem = NS(
         get_user_preferences=AsyncMock(return_value={"voice_enabled": True}),
@@ -53,16 +56,23 @@ def setup(monkeypatch):
     return service, ctx, channel
 
 
-def test_legacy_dispatch_and_disabled_channel(monkeypatch):
+def test_legacy_dispatch_and_join_requires_current_voice_channel(monkeypatch):
     async def check():
         service, ctx, channel = setup(monkeypatch)
         for text in ("hello", "on", "off", None):
             assert not await service.command(ctx, text)
         assert not await service.command(ctx, "status")
-        service.allowed = set()
+        ctx.author.voice.channel = None
         assert await service.command(ctx, "start")
         channel.send.assert_not_awaited()
         assert not service.sessions
+        assert "Join a voice channel" in ctx.reply.call_args.args[0]
+        ctx.author.voice.channel = channel
+        monkeypatch.setattr("voice_conversation.integration.shutil.which", lambda _n: "/test/ffmpeg")
+        monkeypatch.setattr("voice_conversation.integration.ReceiveBackend.client_class",
+                            Mock(side_effect=RuntimeError("backend unavailable")))
+        assert await service.command(ctx, "start")
+        assert "Live voice could not start" in ctx.reply.call_args.args[0]
         await service.bot.close()
 
     asyncio.run(check())
@@ -132,7 +142,8 @@ def test_start_consent_preferences_and_backend_unavailable(monkeypatch):
 
 def test_start_callbacks_and_automatic_membership_shutdown(monkeypatch):
     async def check():
-        service, ctx, channel = setup(monkeypatch)
+        # A stale host allowlist must not block an explicit join in this VC.
+        service, ctx, channel = setup(monkeypatch, allowed_env="999")
         service.queue_greeting = Mock()
         other = NS(id=2, bot=False, voice=NS(channel=channel), display_name="Other", mention="<@2>")
         channel.members = [ctx.author, other, NS(id=9, bot=True)]
