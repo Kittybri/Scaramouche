@@ -4,8 +4,10 @@ from anti_repeat import (
     analyze_repetition,
     build_pattern_scopes,
     build_prompt_guard,
+    merge_recent_messages,
     response_signature,
     rhetorical_pattern,
+    suppress_repeated_name_opener,
 )
 
 
@@ -95,3 +97,24 @@ def test_runtime_pattern_history_is_bounded_and_global_has_no_raw_text():
     assert set(history.global_character["scaramouche"]) == {"fake_praise"}
     history.forget_user("scaramouche", 2099)
     assert not history.samples("scaramouche", user_id=2099).user
+
+
+def test_spoken_delivery_marker_does_not_hide_repeated_opening():
+    recent = merge_recent_messages(["[voice spoken] Ah, Kittybri—listen."])
+    assert recent == ["Ah, Kittybri—listen."]
+    assert suppress_repeated_name_opener(
+        "Ah, Kittybri—so you finally came back.", "Kittybri", recent,
+    ) == "So you finally came back."
+
+
+def test_name_opener_is_at_most_once_within_a_new_reply():
+    assert suppress_repeated_name_opener(
+        "Ah, Kittybri. Listen. Ah, Kittybri—answer me.", "Kittybri", [],
+    ) == "Ah, Kittybri. Listen. Answer me."
+
+
+def test_name_opener_guard_does_not_erase_other_names_or_quoted_words():
+    assert suppress_repeated_name_opener(
+        'I heard you say "Ah, Kittybri." Oh, Wanderer.',
+        "Kittybri", ["Ah, Kittybri—listen."],
+    ) == 'I heard you say "Ah, Kittybri." Oh, Wanderer.'

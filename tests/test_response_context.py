@@ -60,6 +60,20 @@ def make_context(runtime, *, message="hello", user=None, interaction=None):
     )
 
 
+def test_finalized_spoken_reply_does_not_repeat_name_opener(runtime):
+    context = make_context(runtime)
+    context.request = replace(context.request, display_name="Kittybri")
+    context.recent_replies = ["[voice spoken] Ah, Kittybri—listen."]
+    generated = GeneratedResponse(
+        "Ah, Kittybri—so you came back. Ah, Kittybri, answer me.",
+        context, False, "", 1, False,
+    )
+
+    reply = run(runtime._finalize_character_reply(generated, {}))
+
+    assert reply == "So you came back. Answer me."
+
+
 @pytest.mark.parametrize(
     ("serious", "depth", "roll", "expected"),
     [

@@ -14,6 +14,13 @@ _RUNTIME_RECENT: dict[str, deque[str]] = {
     "wanderer": deque(maxlen=80),
 }
 
+_VOICE_DELIVERY_MARKER = re.compile(r"^\[voice spoken\]\s*", re.IGNORECASE)
+
+
+def _reply_text(text: str) -> str:
+    """Ignore the delivery label when comparing spoken and typed replies."""
+    return _VOICE_DELIVERY_MARKER.sub("", (text or "").strip())
+
 
 _PRAISE_WORDS = {
     "amazing", "astonishing", "brilliant", "clever", "excellent", "impressive",
@@ -417,7 +424,7 @@ def merge_recent_messages(*message_lists: list[str], limit: int = 40) -> list[st
     merged: list[str] = []
     for messages in message_lists:
         for text in messages:
-            cleaned = (text or "").strip()
+            cleaned = _reply_text(text)
             if not cleaned:
                 continue
             key = _normalize(cleaned)
@@ -428,6 +435,31 @@ def merge_recent_messages(*message_lists: list[str], limit: int = 40) -> list[st
             if len(merged) >= limit:
                 return merged
     return merged
+
+
+def suppress_repeated_name_opener(
+    text: str, display_name: str, recent_messages: list[str],
+) -> str:
+    """Keep a rare direct address, but not the same greeting every turn or sentence."""
+    name = (display_name or "").strip()
+    if not text or not name or len(name) > 80:
+        return text
+    opener = re.compile(
+        r"(?:^|(?<=[.!?]\s))\s*Ah\s*,?\s*"
+        + re.escape(name)
+        + r"(?=\W|$)\s*(?:[,:;.!?—-]+\s*)?(?P<next>[A-Za-z])?",
+        re.IGNORECASE | re.MULTILINE,
+    )
+    seen = any(opener.match(_reply_text(old)) for old in recent_messages[:20])
+
+    def replace(match: re.Match[str]) -> str:
+        nonlocal seen
+        if not seen:
+            seen = True
+            return match.group(0)
+        return (match.group("next") or "").upper()
+
+    return opener.sub(replace, text).strip()
 
 
 def _patterns(messages: list[str]) -> tuple[str, ...]:

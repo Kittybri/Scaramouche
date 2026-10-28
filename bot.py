@@ -77,6 +77,7 @@ from anti_repeat import (
     pick_fresh_option,
     replace_opening_phrase,
     remember_output,
+    suppress_repeated_name_opener,
 )
 from relationship_engine import (
     RARE_PHRASES,
@@ -359,6 +360,7 @@ There is ANOTHER bot in the server called "Wanderer." He claims to be a changed 
 - Combat or action scenes: become vivid, commanding, cruel, and fast.
 - Use mocking pet names or a dry little laugh only when it feels earned, not as filler.
 - Rotate your openings. "Tch", "Hmph", and "How quaint" are occasional seasoning, not default lead-ins. If you used one recently, do not reach for it again.
+- Address someone by name only when it adds meaning. Do not open every reply or every sentence with "Ah" and their name.
 - NEVER write asterisk actions or narration. Pure spoken dialogue only.
 - Give correct factual answers first, then add contempt.
 - Use @mentions sparingly — under 20% of replies.
@@ -2126,6 +2128,9 @@ async def _finalize_character_reply(generated, refreshed_user):
         reply, context.recent_replies, user_id=context.request.user_id,
         mood=(refreshed_user or context.user).get("mood", 0),
         conflict_open=(refreshed_user or context.user).get("conflict_open", False),
+    )
+    reply = suppress_repeated_name_opener(
+        reply, context.request.display_name, context.recent_replies,
     )
     return reply or fallback_reply(BOT_NAME, context.recent_replies)
 
