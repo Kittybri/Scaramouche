@@ -107,6 +107,9 @@ class VoiceCommands:
                 return False
         if credential_disclosure(text) or classify_safety(text).protective:
             return False
+        partner = "wanderer" if self.service.name.lower() == "scaramouche" else "scaramouche"
+        if join_intent(text, partner):
+            return True  # Addressed to the other bot; do not answer it here.
         if not join_intent(text, self.service.name):
             return False
         existing = self.service.sessions.get(message.guild.id)

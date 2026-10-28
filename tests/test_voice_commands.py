@@ -196,6 +196,26 @@ def test_voice_note_opted_out_is_not_transcribed():
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("as_note", [False, True])
+def test_other_bot_join_request_is_consumed_without_reply(as_note):
+    async def run():
+        bot, service, controller = setup("scaramouche")
+        service.allowed = frozenset({10})
+        service.mem.get_user_preferences = AsyncMock(return_value={"voice_enabled": True})
+        author = NS(id=2, bot=False, voice=NS(channel=NS(id=10)))
+        audio = NS(is_voice_message=lambda: True)
+        message = NS(content="" if as_note else "Wanderer, join voice chat", author=author,
+                     guild=NS(id=5), attachments=[audio] if as_note else [], reply=AsyncMock())
+        controller._transcribe_note = AsyncMock(return_value="Wanderer, join voice chat")
+        service.command = AsyncMock()
+        assert await controller.maybe_join(message, NS())
+        service.command.assert_not_awaited()
+        message.reply.assert_not_awaited()
+        assert controller._transcribe_note.await_count == int(as_note)
+        await bot.close()
+    asyncio.run(run())
+
+
 def test_voice_note_transcription_uses_bounded_groq_request(monkeypatch):
     async def run():
         import voice_commands
