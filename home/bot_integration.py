@@ -12,6 +12,7 @@ import discord
 from discord.ext import commands
 from .client import HomeClient
 from .protocol import command, Rejected, ID
+from .menu import HomeMenu, panel_embed
 
 SIGNALS = {"irritated", "calm_night", "birthday"}
 
@@ -349,10 +350,19 @@ class HomeBot:
 
         @self.bot.group(name="home", invoke_without_command=True)
         async def home(ctx):
-            await say(
-                ctx,
-                "Home: location on/off/delete · actions on/off · alarms on/off · output <device|off> · do <device> <action> <JSON> · confirm <id> · speak <device> <text>. Owner: status/devices/agent/permissions/audit/test/disable/enable.",
-            )
+            """Open your private home controls and setup status."""
+            try:
+                prefs = await self.mem.get_user_preferences(ctx.author.id)
+                await ctx.author.send(
+                    embed=panel_embed(self, prefs),
+                    view=HomeMenu(self, ctx.author.id, 0),
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            except discord.Forbidden:
+                await say(ctx, "I couldn't DM you. Open a DM with me, then run !home there.")
+                return
+            if ctx.guild:
+                await say(ctx, "Home controls sent privately.")
 
         @home.command(name="location")
         async def location(ctx, mode: str):
