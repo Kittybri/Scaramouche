@@ -220,6 +220,19 @@ class PersistentWorld:
             await db.commit()
         return removed
 
+    async def preferences(self,user_id,setting="",value=""):
+        """One scoped implementation for prefix and private slash world settings."""
+        await self.mem.get_user_preferences(user_id)
+        fields={"grudges":"grudge_enabled","lullaby":"lullaby_enabled"}
+        if setting in fields and value.lower() in ("on","off"):
+            await self.mem.set_user_preference(user_id,fields[setting],int(value.lower()=="on"))
+        elif setting=="lullaby_hour" and value.isdigit() and 20<=int(value)<=23:
+            await self.mem.set_user_preference(user_id,"lullaby_start_hour",int(value))
+        elif setting and setting!="status":
+            return "Use /world prefs: grudges or lullaby = on/off, or lullaby_hour = 20–23."
+        prefs=await self.mem.get_user_preferences(user_id)
+        return f"Grudges: {prefs['grudge_enabled']} | Lullaby: {prefs['lullaby_enabled']} | Start hour: {prefs['lullaby_start_hour']}"
+
     def install_commands(self,bot):
         self.bot = bot
         async def say(ctx,text):
@@ -227,17 +240,7 @@ class PersistentWorld:
 
         @bot.command(name="worldprefs")
         async def worldprefs(ctx,setting: str="",value: str=""):
-            await self.mem.get_user_preferences(ctx.author.id)
-            fields={"grudges":"grudge_enabled","lullaby":"lullaby_enabled"}
-            if setting in fields and value.lower() in ("on","off"):
-                await self.mem.set_user_preference(ctx.author.id,fields[setting],int(value.lower()=="on"))
-            elif setting=="lullaby_hour" and value.isdigit() and 20<=int(value)<=23:
-                await self.mem.set_user_preference(ctx.author.id,"lullaby_start_hour",int(value))
-            elif setting:
-                await say(ctx,"Use !worldprefs grudges|lullaby on|off, or !worldprefs lullaby_hour 20–23.")
-                return
-            prefs=await self.mem.get_user_preferences(ctx.author.id)
-            await say(ctx,f"Grudges: {prefs['grudge_enabled']} | Lullaby: {prefs['lullaby_enabled']} | Start hour: {prefs['lullaby_start_hour']}")
+            await say(ctx,await self.preferences(ctx.author.id,setting,value))
 
         @bot.command(name="grudges")
         @commands.cooldown(1,15,commands.BucketType.user)

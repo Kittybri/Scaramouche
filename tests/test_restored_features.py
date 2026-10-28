@@ -114,15 +114,15 @@ async def test_slash_registration_preserves_tarot_google_and_no_bulk_sync(tmp_pa
         bot.tree.command(name=name)(callback)
     c=RestoredSlash(bot,None,None,None,None,None,None,None).install()
     names={x.qualified_name for x in bot.tree.walk_commands()}
-    assert {'dashboard achievements','world add','prefs voice','duo start','scaramouche','google','tarot'}<=names
-    assert len(names)==25
+    assert {'dashboard achievements','world add','world prefs','weatherlocation','prefs voice','duo start','scaramouche','google','tarot'}<=names
+    assert len(names)==27
     bot._connection.application_id=123
     bot.http.upsert_global_command=AsyncMock()
     bot.tree.sync=AsyncMock(side_effect=AssertionError('bulk overwrite'))
     await c.sync()
     assert [x.args[1]['name'] for x in bot.http.upsert_global_command.call_args_list]==list(c.ROOTS)
     await c.sync()
-    assert bot.http.upsert_global_command.await_count==5
+    assert bot.http.upsert_global_command.await_count==6
     await bot.close()
 
 @run

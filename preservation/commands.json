@@ -1654,6 +1654,10 @@
       "group": false,
       "module": "restored_slash"
     },
+    "weatherlocation": {
+      "group": false,
+      "module": "restored_slash"
+    },
     "world": {
       "group": true,
       "module": null
@@ -1663,6 +1667,10 @@
       "module": "restored_slash"
     },
     "world cases": {
+      "group": false,
+      "module": "restored_slash"
+    },
+    "world prefs": {
       "group": false,
       "module": "restored_slash"
     },
@@ -1812,7 +1820,6 @@
     "!search",
     "!serverwipe",
     "!setrival",
-    "!setweather",
     "!ship",
     "!silence",
     "!slowtrap",
@@ -1865,10 +1872,8 @@
     "!voice",
     "!wager",
     "!weather",
-    "!weatherlocation",
     "!whisper",
     "!wipe",
-    "!worldprefs",
     "!write",
     "!rpg1",
     "!harbinger1",
@@ -1884,8 +1889,6 @@
     "!birthdate",
     "!dob",
     "!setbirthday",
-    "!world",
-    "!worldadd",
     "!cases",
     "!achievements",
     "!gallery"

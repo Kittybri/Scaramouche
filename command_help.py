@@ -5,6 +5,7 @@ OWNER_COMMANDS = frozenset(["build","forceheartbeat","githubissue","integrations
 OWNER_COMMANDS = OWNER_COMMANDS | {"pc", "servers"}
 GOOGLE_MENU_ACTIONS = frozenset({"google connect", "google disconnect", "google permissions", "google status"})
 HOME_MENU_ACTIONS = frozenset({"home actions", "home alarms", "home confirm", "home do", "home location", "home output", "home speak"})
+SLASH_FIRST_COMMANDS = frozenset({"weatherlocation", "world", "worldadd", "worldprefs"})
 
 def owner_only(name):
     return any(name == root or name.startswith(root + " ") for root in OWNER_COMMANDS)
@@ -13,7 +14,7 @@ def public_catalog(bot):
     pages = []
     rows = []
     for command in sorted(bot.walk_commands(), key=lambda c: c.qualified_name):
-        if owner_only(command.qualified_name) or command.qualified_name in GOOGLE_MENU_ACTIONS | HOME_MENU_ACTIONS:
+        if owner_only(command.qualified_name) or command.qualified_name in GOOGLE_MENU_ACTIONS | HOME_MENU_ACTIONS | SLASH_FIRST_COMMANDS:
             continue
         parent = command.full_parent_name
         aliases = [((parent + " ") if parent else "") + alias for alias in command.aliases]
