@@ -30,5 +30,13 @@
     "replacement": "Keep every slash command registered in Discord's command tree; users discover them by typing /. Prefix help still presents its existing character and public prefix-command pages.",
     "privacy_impact": "None; this changes help presentation only, not command permissions, execution, or data handling.",
     "validation": "Help pagination/no-index regression, runtime slash registration, manifest-diff gate, preservation tests, and full suite before deployment."
+  },
+  {
+    "authorization": "Current user request: keep only !google in Scaramouche's command list; the Google connection message already presents the other actions.",
+    "removed_surfaces": ["help:!google connect", "help:!google disconnect", "help:!google permissions", "help:!google status"],
+    "reason": "Four Google action rows duplicate the connected-account menu and crowd the public command list.",
+    "replacement": "Keep !google visible as the entry point and retain all four registered subcommands and the connection-menu actions without behavior changes.",
+    "privacy_impact": "None; only help visibility changes. OAuth, permissions, disconnect, and status behavior remain intact.",
+    "validation": "Help-catalog and runtime registration regression, manifest-diff gate, preservation tests, and full suite before staging deployment."
   }
 ]

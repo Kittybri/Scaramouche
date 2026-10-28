@@ -198,12 +198,20 @@ async def test_help_catalog_is_paginated_and_does_not_expose_owner_commands():
     for i in range(45):
         bot.add_command(commands.Command(callback,name=f"public{i}",aliases=[f"p{i}"]))
     bot.add_command(commands.Command(callback,name="build"))
+    google = commands.Group(callback, name="google", invoke_without_command=True)
+    for action in ("connect", "disconnect", "permissions", "status"):
+        google.add_command(commands.Command(callback, name=action))
+    bot.add_command(google)
     pages = public_catalog(bot)
     ctx = SimpleNamespace(send=AsyncMock())
     await send_help(ctx,pages)
     embeds = [e for c in ctx.send.call_args_list for e in c.kwargs.get("embeds",[])]
     all_text = json.dumps([e.to_dict() for e in embeds])
     assert "!build" not in all_text and "!public44" in all_text and "!p44" in all_text
+    assert "!google" in all_text
+    for action in ("connect", "disconnect", "permissions", "status"):
+        assert bot.get_command("google " + action) is not None
+        assert "!google " + action not in all_text
     assert bot.tree.get_command("sample") is sample
     assert not any(e.title == "Slash command index" for e in embeds)
     assert "/sample" not in all_text
