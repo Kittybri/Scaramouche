@@ -93,3 +93,168 @@ def test_wanderer_uses_existing_complete_tree_sync_without_racing_it():
         await bot.close()
     asyncio.run(run())
 
+
+
+@pytest.mark.parametrize("name,utterance", [
+    ("scaramouche", "Hey Scaramouche, voice voice channel"),
+    ("scaramouche", "Scara join voice cahat"),
+    ("wanderer", "Wanderer, can you join the voice channel?"),
+])
+def test_natural_request_joins_only_named_bot(name, utterance, monkeypatch):
+    from voice_commands import join_intent
+    assert join_intent(utterance, name)
+    other = "wanderer" if name == "scaramouche" else "scaramouche"
+    assert not join_intent(utterance, other)
+
+    async def run():
+        bot, service, controller = setup(name)
+        channel = NS(id=10)
+        service.allowed = frozenset({10})
+        author = NS(id=2, bot=False, voice=NS(channel=channel))
+        guild = NS(id=5)
+        message = NS(content=utterance, author=author, guild=guild, attachments=[], reply=AsyncMock())
+        ctx = NS(author=author, guild=guild, reply=AsyncMock())
+        async def start(_ctx, action):
+            assert action == "join"
+            service.sessions[5] = NS(active=True)
+        service.command = AsyncMock(side_effect=start)
+        assert await controller.maybe_join(message, ctx)
+        service.command.assert_awaited_once_with(ctx, "join")
+        assert name == "scaramouche" or "Alright" in message.reply.call_args.args[0]
+        assert message.reply.await_count == 1
+        assert not message.reply.call_args.kwargs["allowed_mentions"].everyone
+        await bot.close()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("utterance", [
+    "Scara, how do I join voice chat?",
+    "Scaramouche, don't join voice chat.",
+    "I want to join Scaramouche in voice.",
+    "Wanderer, join voice chat.",
+    "Scaramouche and Wanderer, join voice chat.",
+    "Scara, what is a voice channel?",
+    "Scara, does voice chat work?",
+    "Scara, do not join voice chat.",
+    "Scara, don’t join voice chat.",
+    "!join scaramouche",
+])
+def test_conversational_route_rejects_non_commands_and_partner(utterance):
+    from voice_commands import join_intent
+    assert not join_intent(utterance, "scaramouche")
+
+
+def test_voice_note_uses_short_transcript_and_existing_guard(monkeypatch):
+    async def run():
+        bot, service, controller = setup("wanderer")
+        service.mem.get_user_preferences = AsyncMock(return_value={"voice_enabled": True})
+        service.allowed = frozenset({10})
+        audio = NS(is_voice_message=lambda: True, duration=3, size=4000, read=AsyncMock(return_value=b"OggSfake"))
+        author = NS(id=2, bot=False, voice=NS(channel=NS(id=10)))
+        message = NS(content="", author=author, guild=NS(id=5), attachments=[audio], reply=AsyncMock())
+        ctx = NS(author=author, guild=message.guild, reply=AsyncMock())
+        controller._transcribe_note = AsyncMock(return_value="Wanderer, join voice chat")
+        service.command = AsyncMock(side_effect=lambda _ctx, _action: service.sessions.update({5: NS(active=True)}))
+        assert await controller.maybe_join(message, ctx)
+        controller._transcribe_note.assert_awaited_once_with(audio)
+        service.command.assert_awaited_once_with(ctx, "join")
+        assert "Alright" in message.reply.call_args.args[0]
+
+        service.command.reset_mock()
+        service.sessions.clear()
+        message.author.voice.channel.id = 99
+        assert not await controller.maybe_join(message, ctx)
+        service.command.assert_not_awaited()
+        assert controller._transcribe_note.await_count == 1
+        await bot.close()
+    asyncio.run(run())
+
+
+def test_voice_note_rejects_long_or_large_audio_before_download():
+    async def run():
+        bot, service, controller = setup()
+        for duration, size in [(31, 1000), (3, 2_000_001)]:
+            audio = NS(is_voice_message=lambda: True, duration=duration, size=size, read=AsyncMock())
+            assert not await controller._transcribe_note(audio)
+            audio.read.assert_not_awaited()
+        await bot.close()
+    asyncio.run(run())
+
+
+def test_voice_note_opted_out_is_not_transcribed():
+    async def run():
+        bot, service, controller = setup("wanderer")
+        service.allowed = frozenset({10})
+        service.mem.get_user_preferences = AsyncMock(return_value={"voice_enabled": False})
+        author = NS(id=2, bot=False, voice=NS(channel=NS(id=10)))
+        audio = NS(is_voice_message=lambda: True)
+        message = NS(content="", author=author, guild=NS(id=5), attachments=[audio])
+        controller._transcribe_note = AsyncMock()
+        assert not await controller.maybe_join(message, NS())
+        controller._transcribe_note.assert_not_awaited()
+        await bot.close()
+    asyncio.run(run())
+
+
+def test_voice_note_transcription_uses_bounded_groq_request(monkeypatch):
+    async def run():
+        import voice_commands
+        bot, service, controller = setup()
+        service.stt_key = "test-key-not-real"
+        audio = NS(is_voice_message=lambda: True, duration=3, size=12, read=AsyncMock(return_value=b"OggSfake"))
+        response = NS(status=200, content=NS(read=AsyncMock(return_value=b'{"text":"Scara join voice chat"}')))
+        response.__aenter__ = AsyncMock(return_value=response)
+        response.__aexit__ = AsyncMock(return_value=None)
+        class ResponseContext:
+            async def __aenter__(self): return response
+            async def __aexit__(self, *_args): return None
+        class ClientContext:
+            async def __aenter__(self): return self
+            async def __aexit__(self, *_args): return None
+            def post(self, url, *, headers, data):
+                assert url.endswith("/audio/transcriptions")
+                assert headers["Authorization"] == "Bearer test-key-not-real"
+                assert data.is_multipart
+                return ResponseContext()
+        monkeypatch.setattr(voice_commands.aiohttp, "ClientSession", lambda **_kwargs: ClientContext())
+        assert await controller._transcribe_note(audio) == "Scara join voice chat"
+        audio.read.assert_awaited_once_with()
+        response.content.read.assert_awaited_once_with(8193)
+        await bot.close()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("transcript", [
+    "Wanderer, join voice chat. password: hunter22",
+    "Wanderer, join voice chat. I want to hurt myself",
+])
+def test_voice_note_sensitive_transcript_never_joins(transcript):
+    async def run():
+        bot, service, controller = setup("wanderer")
+        service.mem.get_user_preferences = AsyncMock(return_value={"voice_enabled": True})
+        service.allowed = frozenset({10})
+        author = NS(id=2, bot=False, voice=NS(channel=NS(id=10)))
+        audio = NS(is_voice_message=lambda: True)
+        message = NS(content="", author=author, guild=NS(id=5), attachments=[audio], reply=AsyncMock())
+        controller._transcribe_note = AsyncMock(return_value=transcript)
+        service.command = AsyncMock()
+        assert not await controller.maybe_join(message, NS())
+        service.command.assert_not_awaited()
+        await bot.close()
+    asyncio.run(run())
+
+
+def test_natural_join_failure_does_not_claim_presence():
+    async def run():
+        bot, service, controller = setup("scaramouche")
+        service.allowed = frozenset({10})
+        author = NS(id=2, bot=False, voice=NS(channel=NS(id=99)), guild_permissions=NS(manage_guild=False))
+        message = NS(content="Scara join voice chat", author=author, guild=NS(id=5), attachments=[], reply=AsyncMock())
+        ctx = NS(author=author, guild=message.guild, reply=AsyncMock())
+        assert await controller.maybe_join(message, ctx)
+        assert "Join a VC" in ctx.reply.call_args.args[0]
+        message.reply.assert_not_awaited()
+        assert not service.sessions
+        await bot.close()
+    asyncio.run(run())
+
