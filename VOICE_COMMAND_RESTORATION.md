@@ -19,7 +19,7 @@ Existing !voice commands, voice engine, receive/STT/Fish/playback, dependencies,
 privacy, Tarot and Google integration remain unchanged.
 
 ## Validation
-- Full suite: 843 passed, 1 skipped.
+- Final full suite including registration-race regression: 844 passed, 1 skipped.
 - Focused registration, voice integration, preservation and Tarot suite: 56 passed, 1 skipped.
 - Runtime preservation: zero errors; 184 prefix commands, 27 slash entries.
 - compileall and git diff --check passed.
@@ -40,5 +40,13 @@ HTTP failure. The initial deployment stopped before any service changes.
 That exact existing fix and its live PyPDF2==3.0.1 requirements entry are preserved
 in this candidate to avoid reverting live behavior; they are not a new attachment
 feature or a voice-engine modification. The deployment reuses the existing venv.
-Deployment evidence will be appended after verifying the live registrations.
+## Live staging result
+- Deployed code SHA: `8e2d2adbff843970cc2cb657ce5955f6ed0f22c1`.
+- Service active; automatic restart count 0; gateway ready, no startup traceback
+  and no voice registration error after a controlled restart.
+- Discord global commands contain exactly one `/join` and one `/leave`.
+  Existing Tarot, Google, dashboard, duo, preferences and world entries remain.
+- Shared and both bot SQLite `quick_check` results: `ok`.
+- Callback service and protected configuration remained unchanged.
+- Spoken audio was not tested as part of this command restoration.
 
