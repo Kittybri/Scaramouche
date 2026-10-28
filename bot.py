@@ -6553,6 +6553,8 @@ async def help_cmd(ctx):
         from connections.discord_ui import GOOGLE_HELP
         e1.description += "\n\n" + GOOGLE_HELP
         from tarot_commands import TAROT_HELP
+        from voice_commands import VOICE_HELP
+        e1.description += "\n\n" + VOICE_HELP
         e1.description += "\n\n" + TAROT_HELP + "\nPrefix: !scaratarot · !scaradaily · !scarahistory · !scarasettings"
         for n,v in [
             ("🔊 !voice <msg>","Voice message — !speak !say"),
@@ -6705,6 +6707,8 @@ PC.install()
 from voice_conversation.integration import VoiceConversation
 VOICE_CONVERSATION = VoiceConversation(bot, mem, BOT_NAME, get_response, get_audio_with_mood, GROQ_API_KEY, OWNER_ID, _record_delivered_reply)
 VOICE_CONVERSATION.install()
+from voice_commands import VoiceCommands
+VOICE_COMMANDS = VoiceCommands(VOICE_CONVERSATION).install()
 from voice_conversation.features import AdvancedVC
 VOICE_CONVERSATION.features = AdvancedVC(VOICE_CONVERSATION, INTEGRATION_CONFIG.section("advanced_vc"), _soundboard_assets, SOUNDBOARD_GUILD_IDS)
 VOICE_CONVERSATION.features.install()

@@ -3,6 +3,8 @@
   "bot": "scaramouche",
   "provenance": "historical_audit.json plus verified runtime import; unresolved legacy surfaces retained below",
   "prefix": {
+    "join": {"aliases": ["listen"], "module": "voice_commands", "cog": null, "group": false, "enabled": true, "access": "public"},
+    "leave": {"aliases": [], "module": "voice_commands", "cog": null, "group": false, "enabled": true, "access": "public"},
     "affection": {
       "aliases": [],
       "cog": null,
@@ -1566,6 +1568,8 @@
     }
   },
   "slash": {
+    "join": {"module": "voice_commands", "group": false},
+    "leave": {"module": "voice_commands", "group": false},
     "dailycard": {
       "group": false,
       "module": "tarot_commands"
@@ -1670,6 +1674,11 @@
   "cogs": [],
   "extensions": [],
   "help_entries": [
+    "!join",
+    "!listen",
+    "!leave",
+    "/join",
+    "/leave",
     "!activespeaker",
     "!affection",
     "!aistatus",
@@ -1939,6 +1948,8 @@
     "servers"
   ],
   "public_commands": [
+    "join",
+    "leave",
     "affection",
     "anime",
     "answer",
@@ -2302,6 +2313,7 @@
       "voice_conversation.integration.VoiceConversation.channel_deleted"
     ],
     "on_ready": [
+      "voice_commands.VoiceCommands.ready",
       "connections.discord_ui.ConnectionsController.ready",
       "server_chaos.service.ServerChaos.on_ready",
       "tarot_commands.TarotController.sync_commands",
