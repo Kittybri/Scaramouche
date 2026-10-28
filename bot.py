@@ -3427,6 +3427,9 @@ async def _dispatch_message(message):
             else:
                 await message.reply("This game owns the interaction. Use !court defend/accept/cancel or !wager accept/reject/cancel with its ID.", mention_author=False)
             return
+        if await VOICE_COMMANDS.maybe_join(message, command_ctx):
+            interaction.consume("voice_join")
+            return
         if (interaction.opted_out or interaction.quiet_hours) and not interaction.direct:
             interaction.consume("ambient_opt_out", suppressed=True)
             return
