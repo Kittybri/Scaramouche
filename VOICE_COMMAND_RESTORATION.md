@@ -11,7 +11,10 @@ voice_commands.py restores prefix commands and guild-only /join and /leave.
 All routes delegate to the existing dispatcher, retaining channel allowlists,
 voice preferences, session locking, initiator/manager leave authorization and
 backend checks. Optional prefix targets reuse the current character-target filter.
-Slash replies defer privately. Startup upserts only the two owned slash names.
+Slash replies defer privately. Scaramouche upserts only the two owned slash names;
+Wanderer uses its existing complete-tree synchronization. Live validation caught
+a duplicate /join from concurrent upsert and tree sync; the added regression
+ensures Wanderer never launches the competing upsert.
 Existing !voice commands, voice engine, receive/STT/Fish/playback, dependencies,
 privacy, Tarot and Google integration remain unchanged.
 

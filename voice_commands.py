@@ -46,6 +46,10 @@ class VoiceCommands:
             await reply("The voice control couldn't complete. Try again shortly.")
 
     async def ready(self):
+        # Wanderer's on_ready already syncs its complete tree. A simultaneous
+        # upsert can race that bulk sync and create duplicate Discord entries.
+        if self.service.name.lower() == "wanderer":
+            return
         if self.synced or not self.bot.application_id:
             return
         try:

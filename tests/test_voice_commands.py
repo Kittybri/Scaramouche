@@ -82,3 +82,14 @@ def test_registration_upserts_only_owned_names_once():
         await bot.close()
     asyncio.run(run())
 
+
+def test_wanderer_uses_existing_complete_tree_sync_without_racing_it():
+    async def run():
+        bot, service, controller = setup("wanderer")
+        bot.http.upsert_global_command = AsyncMock()
+        await controller.ready()
+        bot.http.upsert_global_command.assert_not_awaited()
+        assert bot.tree.get_command("join") and bot.tree.get_command("leave")
+        await bot.close()
+    asyncio.run(run())
+
