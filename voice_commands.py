@@ -1,7 +1,9 @@
 """Discoverable voice controls delegating to the existing session implementation."""
 import asyncio
+import contextlib
 import json
 import logging
+import random
 import re
 from types import SimpleNamespace
 
@@ -15,7 +17,9 @@ from interaction_policy import credential_disclosure
 log = logging.getLogger(__name__)
 VOICE_HELP = (
     "Live voice: `!join [scaramouche|wanderer]` (alias `!listen`) or `/join`. "
-    "End with `!leave [scaramouche|wanderer]` or `/leave`. "
+    "End with `!leave [scaramouche|wanderer]`, `/leave`, or say 'Scara, leave voice channel'. "
+    "A plain 'leave voice channel' asks both bots to leave. "
+    "In the VC, say exactly 'Scaramouche leave voice channel' or 'Wanderer leave voice channel'. "
     "Join a server VC first; choose the bot's app for slash commands. "
     "You can also say 'Scara, join voice chat' or 'Wanderer, join the voice channel' "
     "in text or a short Discord voice note while you are in a VC. "
@@ -38,6 +42,30 @@ def join_intent(text, name):
         re.search(r"\b(?:join|hop|come|connect|enter|get into|start)\b.{0,65}\b(?:voice|vc)\b", text)
         or re.search(r"\b(?:voice|vc)\b.{0,15}\b(?:channel|chat|cahat|call)\b", text)
     )
+
+
+def leave_intent(text, name):
+    """Recognize a short direct exit request, optionally aimed at one bot."""
+    text = (text or "").lower().replace("’", "'").strip()
+    if len(text) > 120 or len(text.split()) > 16 or text.startswith("!"):
+        return False
+    text = re.sub(r"[.!?]+$", "", text).strip()
+    if re.search(r"\b(?:don't|dont|do not|never|why|how|what|who|whether|should i|can i)\b", text):
+        return False
+    self_names = ("scaramouche", "scara", "balladeer") if name.lower() == "scaramouche" else ("wanderer", "hatguy", "hat guy")
+    other_names = ("wanderer", "hatguy", "hat guy") if name.lower() == "scaramouche" else ("scaramouche", "scara", "balladeer")
+    if any(re.search(r"\b" + re.escape(alias) + r"\b", text) for alias in other_names):
+        return False
+    text = re.sub(r"^(?:hey|please)\s+", "", text)
+    for alias in self_names:
+        text = re.sub(r"^" + re.escape(alias) + r"\s*,?\s+", "", text)
+    text = re.sub(r"^please\s+", "", text)
+    return bool(re.fullmatch(
+        r"(?:leave|exit|disconnect(?: from)?|get out of)\s+(?:the\s+)?"
+        r"(?:voice|vc)(?:\s+(?:channel|chat|call))?(?:\s+(?:please|now))?"
+        r"|stop\s+listening(?:\s+(?:please|now))?",
+        text,
+    ))
 
 
 class VoiceCommands:
@@ -92,9 +120,6 @@ class VoiceCommands:
             channel = getattr(getattr(message.author, "voice", None), "channel", None)
             if not channel:
                 return False
-            prefs = await self.service.mem.get_user_preferences(message.author.id)
-            if not prefs.get("voice_enabled", True):
-                return False
             try:
                 text = await self._transcribe_note(note)
             except asyncio.CancelledError:
@@ -121,6 +146,33 @@ class VoiceCommands:
                 else "Alright, I'm here. Go on."
             )
             await message.reply(line, mention_author=False, allowed_mentions=discord.AllowedMentions.none())
+        return True
+
+    async def maybe_leave(self, message, ctx):
+        """A participant can ask the named bot, or both bots, to leave in text."""
+        if not message.guild or message.author.bot:
+            return False
+        text = message.content or ""
+        partner = "wanderer" if self.service.name.lower() == "scaramouche" else "scaramouche"
+        if not leave_intent(text, self.service.name):
+            return leave_intent(text, partner)  # Partner-only request: stay silent.
+        session = self.service.sessions.get(message.guild.id)
+        if session:
+            voice_channel = getattr(getattr(message.author, "voice", None), "channel", None)
+            authorized = (
+                message.author.id in {self.service.owner_id, getattr(session, "initiator", None)}
+                or bool(getattr(getattr(message.author, "guild_permissions", None), "manage_guild", False))
+                or bool(voice_channel and getattr(voice_channel, "id", None) == getattr(session, "channel_id", None))
+            )
+            if authorized and hasattr(message, "reply"):
+                lines = (
+                    ("Tch. I'm leaving. Try not to miss me.", "Fine. Enjoy the silence while it lasts.", "I've had enough of this room. Goodbye.")
+                    if self.service.name.lower() == "scaramouche"
+                    else ("I'm going. Try not to cause trouble without me.", "Fine. The room is yours.", "I'll leave. Don't get used to ordering me around.")
+                )
+                with contextlib.suppress(discord.HTTPException):
+                    await message.reply(random.choice(lines), mention_author=False, allowed_mentions=discord.AllowedMentions.none())
+            await self.service.command(ctx, "leave")
         return True
 
     async def slash(self, interaction, action):
@@ -163,13 +215,13 @@ class VoiceCommands:
             await self.prefix(ctx, "leave", target)
         self.bot.add_command(commands.Command(
             join, name="join", aliases=["listen"],
-            help="Join your enabled voice channel. Optional target: scaramouche or wanderer.",
+            help="Join your current server voice channel. Optional target: scaramouche or wanderer.",
         ))
         self.bot.add_command(commands.Command(
             leave, name="leave",
-            help="End the live voice session (session starter or server manager). Optional bot name.",
+            help="End the live voice session (anyone in the VC, starter, or server manager). Optional bot name.",
         ))
-        @self.bot.tree.command(name="join", description="Join your enabled voice channel and start live conversation.")
+        @self.bot.tree.command(name="join", description="Join your current server voice channel and start live conversation.")
         @app_commands.guild_only()
         async def join_slash(interaction: discord.Interaction):
             await self.slash(interaction, "join")

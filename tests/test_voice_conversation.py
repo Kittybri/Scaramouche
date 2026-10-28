@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from voice_conversation.receive import ReceiveBackend, eligible
-from voice_conversation.session import Session, State, Playback, is_interrupt_keyword
+from voice_conversation.session import Session, State, Playback, is_interrupt_keyword, is_spoken_leave_command
 from voice_conversation.speech import Limits, Segmenter, Utterance, chunks, GroqSTT
 
 
@@ -46,6 +46,43 @@ def setup(**kwargs):
     session.consent(1, True)
     session.active = True
     return session
+
+
+@pytest.mark.parametrize("name,spoken,expected", [
+    ("scaramouche", "Scaramouche leave voice channel", True),
+    ("scaramouche", "scaramouche leave voice channel.", True),
+    ("scaramouche", "Scaramouche, leave voice channel.", True),
+    ("wanderer", "Wanderer leave voice channel", True),
+    ("scaramouche", "scara leave voice channel", False),
+    ("scaramouche", "hey scaramouche leave voice channel", False),
+    ("scaramouche", "wanderer leave voice channel", False),
+    ("wanderer", "wanderer leave vc", False),
+    ("wanderer", "wanderer please leave voice channel", False),
+])
+def test_spoken_leave_phrase_is_exact(name, spoken, expected):
+    assert is_spoken_leave_command(spoken, name) is expected
+
+
+def test_exact_spoken_leave_consumes_transcript_without_normal_reply():
+    async def check():
+        called = asyncio.Event()
+
+        async def leave(uid):
+            assert uid == 1
+            called.set()
+
+        s = setup(on_spoken_leave=leave)
+        s.stt.transcribe.return_value = "Scaramouche leave voice channel."
+        worker = asyncio.create_task(s.transcribe_loop())
+        s.enqueue(Utterance(1, b"raw", time.monotonic(), time.monotonic()))
+        await asyncio.wait_for(called.wait(), 1)
+        assert s.metrics["spoken_leave_requested"] == 1
+        s.respond.assert_not_awaited()
+        await s.stop()
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
+
+    run(check())
 
 
 @pytest.mark.parametrize(

@@ -50,7 +50,7 @@ def test_bad_target_and_dm_cannot_start():
 def test_slash_defers_and_reuses_original_user_and_guards(action):
     async def run():
         bot, service, controller = setup()
-        # Real handle requires the requester to be in a VC and rejects unauthorized stops.
+        # Real handle requires the requester to be in a VC for joining.
         interaction = NS(user=NS(id=2, guild_permissions=NS(manage_guild=False), voice=None),
             guild=NS(id=5), channel=NS(id=8),
             response=NS(defer=AsyncMock()), followup=NS(send=AsyncMock()))
@@ -62,7 +62,7 @@ def test_slash_defers_and_reuses_original_user_and_guards(action):
         assert result.kwargs["ephemeral"] is True
         assert not result.kwargs["allowed_mentions"].everyone
         assert "mention_author" not in result.kwargs
-        assert ("Join a voice channel" if action == "join" else "session initiator") in result.args[0]
+        assert ("Join a voice channel" if action == "join" else "not in a voice channel") in result.args[0]
         assert not service.sessions
         await bot.close()
     asyncio.run(run())
@@ -143,6 +143,85 @@ def test_conversational_route_rejects_non_commands_and_partner(utterance):
     assert not join_intent(utterance, "scaramouche")
 
 
+@pytest.mark.parametrize("name,utterance", [
+    ("scaramouche", "leave voice channel"),
+    ("wanderer", "leave voice channel"),
+    ("scaramouche", "Scara, leave the voice channel"),
+    ("wanderer", "Hey Wanderer, get out of VC now"),
+    ("scaramouche", "Scaramouche stop listening"),
+])
+def test_natural_leave_routes_to_named_or_both_bots(name, utterance):
+    from voice_commands import leave_intent
+    assert leave_intent(utterance, name)
+
+    async def run():
+        bot, service, controller = setup(name)
+        guild = NS(id=5)
+        author = NS(id=2, bot=False)
+        message = NS(content=utterance, author=author, guild=guild)
+        ctx = NS(author=author, guild=guild)
+        service.sessions[5] = NS(active=True)
+        service.command = AsyncMock()
+        assert await controller.maybe_leave(message, ctx)
+        service.command.assert_awaited_once_with(ctx, "leave")
+        await bot.close()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("utterance", [
+    "Wanderer, leave voice channel",
+    "Scara, don't leave voice channel",
+    "Should Scara leave voice chat?",
+    "Why did Scara leave the voice channel?",
+    "Scara and Wanderer leave voice channel",
+    "!leave scaramouche",
+])
+def test_natural_leave_rejects_partner_negation_and_discussion(utterance):
+    from voice_commands import leave_intent
+    assert not leave_intent(utterance, "scaramouche")
+
+
+def test_partner_only_natural_leave_is_silent_and_absent_session_is_silent():
+    async def run():
+        bot, service, controller = setup("scaramouche")
+        author = NS(id=2, bot=False)
+        guild = NS(id=5)
+        ctx = NS(author=author, guild=guild)
+        service.command = AsyncMock()
+        assert await controller.maybe_leave(NS(content="Wanderer leave VC", author=author, guild=guild), ctx)
+        assert await controller.maybe_leave(NS(content="leave voice channel", author=author, guild=guild), ctx)
+        service.command.assert_not_awaited()
+        await bot.close()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("name", ["scaramouche", "wanderer"])
+def test_authorized_text_leave_replies_before_session_command(name):
+    async def run():
+        bot, service, controller = setup(name)
+        events = []
+        guild = NS(id=5)
+        channel = NS(id=10)
+        author = NS(id=2, bot=False, voice=NS(channel=channel), guild_permissions=NS(manage_guild=False))
+
+        async def reply(text, **_kwargs):
+            assert text
+            events.append("reply")
+
+        async def command(_ctx, action):
+            assert action == "leave"
+            events.append("leave")
+
+        message = NS(content=f"{name} leave voice channel", author=author, guild=guild, reply=reply)
+        service.sessions[5] = NS(active=True, channel_id=10, initiator=1)
+        service.command = command
+        assert await controller.maybe_leave(message, NS(author=author, guild=guild))
+        assert events == ["reply", "leave"]
+        await bot.close()
+
+    asyncio.run(run())
+
+
 def test_voice_note_uses_short_transcript_and_existing_guard(monkeypatch):
     async def run():
         bot, service, controller = setup("wanderer")
@@ -179,16 +258,21 @@ def test_voice_note_rejects_long_or_large_audio_before_download():
     asyncio.run(run())
 
 
-def test_voice_note_opted_out_is_not_transcribed():
+def test_explicit_voice_note_join_ignores_voice_note_output_preference():
     async def run():
         bot, service, controller = setup("wanderer")
         service.mem.get_user_preferences = AsyncMock(return_value={"voice_enabled": False})
         author = NS(id=2, bot=False, voice=NS(channel=NS(id=10)))
         audio = NS(is_voice_message=lambda: True)
-        message = NS(content="", author=author, guild=NS(id=5), attachments=[audio])
-        controller._transcribe_note = AsyncMock()
-        assert not await controller.maybe_join(message, NS())
-        controller._transcribe_note.assert_not_awaited()
+        guild = NS(id=5)
+        message = NS(content="", author=author, guild=guild, attachments=[audio], reply=AsyncMock())
+        ctx = NS(author=author, guild=guild, reply=AsyncMock())
+        controller._transcribe_note = AsyncMock(return_value="Wanderer, join voice chat")
+        service.command = AsyncMock()
+        assert await controller.maybe_join(message, ctx)
+        controller._transcribe_note.assert_awaited_once_with(audio)
+        service.command.assert_awaited_once_with(ctx, "join")
+        service.mem.get_user_preferences.assert_not_awaited()
         await bot.close()
     asyncio.run(run())
 

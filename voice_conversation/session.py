@@ -49,6 +49,15 @@ def is_interrupt_keyword(text: str, name: str) -> bool:
     return False
 
 
+def is_spoken_leave_command(text: str, name: str) -> bool:
+    """Only the character's exact spoken leave phrase ends a live session."""
+    # ASR may insert punctuation (notably a comma after the name), but no
+    # extra or missing spoken words are accepted.
+    return re.findall(r"[a-z0-9]+", (text or "").lower()) == [
+        name.lower(), "leave", "voice", "channel"
+    ]
+
+
 class State(str, Enum):
     IDLE = "IDLE"
     LISTENING = "LISTENING"
@@ -118,6 +127,7 @@ class Session:
         synthesize,
         remember,
         notify,
+        on_spoken_leave=None,
         limits=Limits(),
         vad=None,
     ):
@@ -129,6 +139,9 @@ class Session:
             remember,
             notify,
         )
+        self.on_spoken_leave = on_spoken_leave
+        self.leave_requested = False
+        self.leave_task = None
         self.limits, self.segmenter = limits, Segmenter(limits, vad)
         self.participants, self.epochs = set(), Counter()
         self.focus, self.focus_until = initiator, 0.0
@@ -350,7 +363,8 @@ class Session:
             utterance = await self.jobs.get()
             uid, epoch = utterance.user_id, utterance.epoch
             if (
-                uid not in self.participants
+                self.leave_requested
+                or uid not in self.participants
                 or epoch != self.epochs[uid]
                 or time.monotonic() - utterance.ended > self.limits.stale_seconds
             ):
@@ -394,6 +408,8 @@ class Session:
             if normalized and any(normalized == old for old in self.recent_outputs):
                 self.metrics["echo_dropped"] += 1
                 self.decision("discarded_echo", uid)
+                continue
+            if self.leave_requested:
                 continue
             mode = self.user_interrupt.get(uid, self.interrupt_mode)
             if mode == "KEYWORD" and uid == self.focus:
@@ -459,6 +475,11 @@ class Session:
                 or uid not in self.participants
                 or epoch != self.epochs[uid]
             ):
+                continue
+            if self.on_spoken_leave and is_spoken_leave_command(text, self.name):
+                self.leave_requested = True
+                self.decision("spoken_leave_requested", uid)
+                self.leave_task = asyncio.create_task(self.on_spoken_leave(uid))
                 continue
             plan = await self.feature_event("utterance_completed", uid, text)
             if (
@@ -710,12 +731,17 @@ class Session:
 
     async def stop(self):
         self.active = False
+        leave_task = self.leave_task
+        if leave_task and leave_task is not asyncio.current_task():
+            leave_task.cancel()
         await self.feature_event("session_stopped")
         self.state = State.CANCELLED
         self.participants.clear()
         with contextlib.suppress(Exception):
             await self.backend.stop()
         await self.cancel_response()
+        if leave_task and leave_task is not asyncio.current_task():
+            await asyncio.gather(leave_task, return_exceptions=True)
         for task in self.workers:
             task.cancel()
         await asyncio.gather(*self.workers, return_exceptions=True)

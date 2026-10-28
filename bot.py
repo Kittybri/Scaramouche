@@ -3370,6 +3370,9 @@ async def _dispatch_message(message):
             interaction.consume("privacy")
             await message.reply("Keep credentials out of chat. Remove that message and rotate any real credential you posted; I will not send it to the model.", mention_author=False, allowed_mentions=discord.AllowedMentions.none())
             return
+        if await VOICE_COMMANDS.maybe_leave(message, command_ctx):
+            interaction.consume("voice_leave")
+            return
         deletion_pending = await PRIVACY_DELETION.is_pending(message.author.id)
         if deletion_pending:
             command_name = command_ctx.command.name if command_ctx.command else ""
