@@ -6721,7 +6721,7 @@ PC = CompanionBot(HOME, INTEGRATION_CONFIG.section("companion"), _pc_vision, _pc
 PC.install()
 
 from voice_conversation.integration import VoiceConversation
-VOICE_CONVERSATION = VoiceConversation(bot, mem, BOT_NAME, get_response, get_audio_with_mood, GROQ_API_KEY, OWNER_ID, _record_delivered_reply)
+VOICE_CONVERSATION = VoiceConversation(bot, mem, BOT_NAME, get_response, get_audio_with_mood, GROQ_API_KEY, OWNER_ID, _record_delivered_reply, PARTNER_BOT_ID)
 VOICE_CONVERSATION.install()
 from voice_commands import VoiceCommands
 VOICE_COMMANDS = VoiceCommands(VOICE_CONVERSATION).install()

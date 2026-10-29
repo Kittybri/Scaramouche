@@ -7,6 +7,7 @@ import contextlib
 from difflib import SequenceMatcher
 import io
 import queue
+import random
 import re
 import time
 from collections import Counter, deque
@@ -47,6 +48,22 @@ def is_interrupt_keyword(text: str, name: str) -> bool:
             if len(candidate) >= 7 and SequenceMatcher(None, candidate, alias).ratio() >= 0.78:
                 return True
     return False
+
+
+def names_bot_in_opening(text: str, name: str) -> bool:
+    """A nonfocused speaker must address this bot to interrupt others."""
+    words = re.findall(r"[a-z0-9]+", (text or "").lower())
+    while words and words[0] in {"hey", "okay", "ok", "um", "uh", "please"}:
+        words.pop(0)
+    aliases = {name.lower()}
+    if name.lower() == "scaramouche":
+        aliases.add("scara")
+    return any(
+        word == alias
+        or (len(word) >= 7 and SequenceMatcher(None, word, alias).ratio() >= 0.78)
+        for word in words[:3]
+        for alias in aliases
+    )
 
 
 def is_spoken_leave_command(text: str, name: str) -> bool:
@@ -412,8 +429,10 @@ class Session:
             if self.leave_requested:
                 continue
             mode = self.user_interrupt.get(uid, self.interrupt_mode)
-            if mode == "KEYWORD" and uid == self.focus:
-                keyword = is_interrupt_keyword(text, self.name)
+            if mode == "KEYWORD":
+                keyword = is_interrupt_keyword(text, self.name) and (
+                    uid == self.focus or names_bot_in_opening(text, self.name)
+                )
                 if keyword:
                     self.decision("interrupt_keyword_detected", uid)
                     if self.busy():
@@ -587,11 +606,15 @@ class Session:
         self.completed, self.total = 0, 0
         context = "Voice conversation: output spoken dialogue only; no narration or stage directions. No artificial sentence limit."
         context += " " + feature_context
-        if self.interruption and self.interruption["user_id"] == uid:
+        interrupted = bool(self.interruption and self.interruption["user_id"] == uid)
+        if interrupted:
             context += (
                 " You were interrupted; only completed chunks were heard. Respond to the new utterance naturally. "
-                "Normal interruptions are not grievances; genuine distress takes priority."
+                "Do not treat it as a lasting grievance; genuine distress takes priority."
             )
+            if self.interruption.get("was_speaking"):
+                context += " For a non-urgent interruption, briefly acknowledge being cut off in your own sharp voice, then answer."
+            was_speaking = self.interruption.get("was_speaking", False)
             context += (
                 f" Completed chunk fraction: {self.interruption['progress']:.2f}."
             )
@@ -616,6 +639,20 @@ class Session:
                     "llm", lambda: self.respond(uid, text, context)
                 )
             )
+            if interrupted and was_speaking and reply_override is None:
+                from .personality import urgent
+
+                if (
+                    reply
+                    and not urgent(text)
+                    and not re.search(r"\bin (?:immediate )?danger\b", text, re.I)
+                    and not re.search(r"\b(interrupt(?:ed|ing)?|cut me off|cutting me off)\b", reply, re.I)
+                ):
+                    reply = random.choice((
+                        "You interrupted me. What is it?",
+                        "Tch. You couldn't wait until I finished?",
+                        "Bold of you to cut me off. Go on.",
+                    )) + " " + reply
             self.metrics["response_latency_ms"] = round(
                 (time.monotonic() - tick) * 1000
             )
@@ -687,6 +724,7 @@ class Session:
         ):
             return
         confirmed = time.monotonic()
+        was_speaking = self.state == State.BOT_SPEAKING
         self.clear_pending_response()
         self.state = State.INTERRUPTING
         self.generation += 1
@@ -703,6 +741,7 @@ class Session:
             "type": "voice_interrupted",
             "user_id": uid,
             "progress": self.completed / max(1, self.total),
+            "was_speaking": was_speaking,
             "speech_detected_at": speech_started,
             "confirmed_at": confirmed,
             "stop_called_at": stopped_at,

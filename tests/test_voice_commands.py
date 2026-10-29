@@ -50,7 +50,7 @@ def test_bad_target_and_dm_cannot_start():
 def test_slash_defers_and_reuses_original_user_and_guards(action):
     async def run():
         bot, service, controller = setup()
-        # Real handle requires the requester to be in a VC for joining.
+        # Without a current VC or unambiguous server destination, joining fails safely.
         interaction = NS(user=NS(id=2, guild_permissions=NS(manage_guild=False), voice=None),
             guild=NS(id=5), channel=NS(id=8),
             response=NS(defer=AsyncMock()), followup=NS(send=AsyncMock()))
@@ -62,7 +62,7 @@ def test_slash_defers_and_reuses_original_user_and_guards(action):
         assert result.kwargs["ephemeral"] is True
         assert not result.kwargs["allowed_mentions"].everyone
         assert "mention_author" not in result.kwargs
-        assert ("Join a voice channel" if action == "join" else "not in a voice channel") in result.args[0]
+        assert ("unambiguous voice channel" if action == "join" else "not in a voice channel") in result.args[0]
         assert not service.sessions
         await bot.close()
     asyncio.run(run())
@@ -240,9 +240,9 @@ def test_voice_note_uses_short_transcript_and_existing_guard(monkeypatch):
         service.command.reset_mock()
         service.sessions.clear()
         message.author.voice.channel = None
-        assert not await controller.maybe_join(message, ctx)
-        service.command.assert_not_awaited()
-        assert controller._transcribe_note.await_count == 1
+        assert await controller.maybe_join(message, ctx)
+        service.command.assert_awaited_once_with(ctx, "join")
+        assert controller._transcribe_note.await_count == 2
         await bot.close()
     asyncio.run(run())
 
@@ -350,7 +350,7 @@ def test_natural_join_failure_does_not_claim_presence():
         message = NS(content="Scara join voice chat", author=author, guild=NS(id=5), attachments=[], reply=AsyncMock())
         ctx = NS(author=author, guild=message.guild, reply=AsyncMock())
         assert await controller.maybe_join(message, ctx)
-        assert "Join a voice channel" in ctx.reply.call_args.args[0]
+        assert "unambiguous voice channel" in ctx.reply.call_args.args[0]
         message.reply.assert_not_awaited()
         assert not service.sessions
         await bot.close()

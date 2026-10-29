@@ -20,9 +20,9 @@ VOICE_HELP = (
     "End with `!leave [scaramouche|wanderer]`, `/leave`, or say 'Scara, leave voice channel'. "
     "A plain 'leave voice channel' asks both bots to leave. "
     "In the VC, say exactly 'Scaramouche leave voice channel' or 'Wanderer leave voice channel'. "
-    "Join a server VC first; choose the bot's app for slash commands. "
+    "If you are not in a VC, ask from its matching text channel; a server with only one accessible VC works too. Choose the bot's app for slash commands. "
     "You can also say 'Scara, join voice chat' or 'Wanderer, join the voice channel' "
-    "in text or a short Discord voice note while you are in a VC. "
+    "in text or a short Discord voice note. "
     "Existing `!voice start`, `!voice stop` and `!voice diagnostics` still work."
 )
 
@@ -116,9 +116,6 @@ class VoiceCommands:
         note = next((item for item in message.attachments if item.is_voice_message()), None)
         if note and not text.strip():
             if self.service.sessions.get(message.guild.id):
-                return False
-            channel = getattr(getattr(message.author, "voice", None), "channel", None)
-            if not channel:
                 return False
             try:
                 text = await self._transcribe_note(note)
@@ -215,13 +212,13 @@ class VoiceCommands:
             await self.prefix(ctx, "leave", target)
         self.bot.add_command(commands.Command(
             join, name="join", aliases=["listen"],
-            help="Join your current server voice channel. Optional target: scaramouche or wanderer.",
+            help="Join a server voice channel. If you are not in one, use its matching text channel or the server's only accessible VC. Optional target: scaramouche or wanderer.",
         ))
         self.bot.add_command(commands.Command(
             leave, name="leave",
             help="End the live voice session (anyone in the VC, starter, or server manager). Optional bot name.",
         ))
-        @self.bot.tree.command(name="join", description="Join your current server voice channel and start live conversation.")
+        @self.bot.tree.command(name="join", description="Join a server voice channel and start live conversation.")
         @app_commands.guild_only()
         async def join_slash(interaction: discord.Interaction):
             await self.slash(interaction, "join")

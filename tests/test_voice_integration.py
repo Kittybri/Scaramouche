@@ -93,7 +93,7 @@ def test_spoken_farewell_finishes_before_disconnect(monkeypatch):
     asyncio.run(check())
 
 
-def test_legacy_dispatch_and_join_requires_current_voice_channel(monkeypatch):
+def test_legacy_dispatch_and_join_needs_unambiguous_voice_channel(monkeypatch):
     async def check():
         service, ctx, channel = setup(monkeypatch)
         for text in ("hello", "on", "off", None):
@@ -103,7 +103,7 @@ def test_legacy_dispatch_and_join_requires_current_voice_channel(monkeypatch):
         assert await service.command(ctx, "start")
         channel.send.assert_not_awaited()
         assert not service.sessions
-        assert "Join a voice channel" in ctx.reply.call_args.args[0]
+        assert "unambiguous voice channel" in ctx.reply.call_args.args[0]
         ctx.author.voice.channel = channel
         monkeypatch.setattr("voice_conversation.integration.shutil.which", lambda _n: "/test/ffmpeg")
         monkeypatch.setattr("voice_conversation.integration.ReceiveBackend.client_class",
@@ -247,9 +247,61 @@ def test_start_callbacks_and_automatic_membership_shutdown(monkeypatch):
     asyncio.run(check())
 
 
+def test_join_empty_matching_vc_enrolls_humans_only_when_they_arrive(monkeypatch):
+    async def check():
+        service, ctx, channel = setup(monkeypatch)
+        service.bot._connection.user = NS(id=9)
+        channel.name = "General"
+        channel.members = []
+        ctx.channel = NS(name="general")
+        ctx.guild.voice_channels = [channel, NS(
+            name="Other", permissions_for=lambda _m: NS(connect=True, speak=True, view_channel=True)
+        )]
+        ctx.author.voice.channel = None
+        vc = NS(channel=channel, disconnect=AsyncMock(), listen=Mock(), is_listening=lambda: False)
+        channel.connect = AsyncMock(return_value=vc)
+        monkeypatch.setattr("voice_conversation.integration.shutil.which", lambda _n: "/test/ffmpeg")
+        monkeypatch.setattr("voice_conversation.integration.ReceiveBackend.client_class", lambda _s: object)
+        async def start_backend(backend, client):
+            backend.vc, backend.active = client, True
+        monkeypatch.setattr("voice_conversation.integration.ReceiveBackend.start", start_backend)
+        async def start_session(session):
+            session.active = True
+        monkeypatch.setattr("voice_conversation.integration.Session.start", start_session)
+        monkeypatch.setattr("voice_conversation.session.Segmenter", lambda *a: NS(users={}, metrics={}))
+        service.queue_greeting = Mock()
+
+        await service.command(ctx, "join")
+        channel.connect.assert_awaited_once()
+        session = service.sessions[5]
+        assert session.participants == set()
+        ctx.author.guild = ctx.guild
+        ctx.author.voice.channel = channel
+        await service.voice_state(ctx.author, NS(channel=None), NS(channel=channel))
+        assert session.participants == {1}
+        assert session.focus == 1 and session.focus_until > 0
+        service.queue_greeting.assert_called_once_with(session, ctx.author)
+        await service.bot.close()
+    asyncio.run(check())
+
+
+def test_arrival_can_be_silent_but_still_counts_as_seen(monkeypatch):
+    async def check():
+        service, ctx, channel = setup(monkeypatch)
+        ctx.author.guild = ctx.guild
+        monkeypatch.setattr("voice_conversation.integration.random.random", lambda: 0.25)
+        session = NS(active=True, participants={1})
+        service.queue_greeting(session, ctx.author)
+        assert service.arrivals_seen[5][1] == 1
+        assert not service.greeting_tasks
+        await service.bot.close()
+    asyncio.run(check())
+
+
 def test_automatic_arrival_enrollment_greeting_and_leave(monkeypatch):
     async def check():
         service, ctx, channel = setup(monkeypatch)
+        monkeypatch.setattr("voice_conversation.integration.random.random", lambda: 0.75)
         service.bot._connection.user = NS(id=9)
         ctx.author.guild = ctx.guild
         session = NS(
@@ -302,6 +354,33 @@ def test_automatic_arrival_enrollment_greeting_and_leave(monkeypatch):
     asyncio.run(check())
 
 
+def test_partner_join_is_announced_without_enrollment_or_human_audio_loss(monkeypatch):
+    async def check():
+        service, ctx, channel = setup(monkeypatch)
+        service.bot._connection.user = NS(id=9)
+        service.partner_id = 8
+        partner = NS(id=8, bot=True, guild=ctx.guild, voice=NS(channel=channel))
+        session = NS(
+            active=True, channel_id=10, initiator=1, participants={1},
+            busy=lambda: False, segmenter=NS(users={}), jobs=asyncio.Queue(),
+            submit=AsyncMock(return_value=True), consent=Mock(), decision=Mock(),
+        )
+        service.sessions[5] = session
+        await service.voice_state(partner, NS(channel=None), NS(channel=channel))
+        await asyncio.gather(*list(service.greeting_tasks.values()))
+        session.submit.assert_awaited_once()
+        assert "Wanderer" in session.submit.call_args.kwargs["reply"]
+        session.consent.assert_not_called()
+        partner.voice.channel = None
+        await service.voice_state(partner, NS(channel=channel), NS(channel=None))
+        session.consent.assert_not_called()
+        assert session.participants == {1}
+        service.sessions.clear()
+        await service.bot.close()
+
+    asyncio.run(check())
+
+
 def test_auto_enrollment_needs_no_discord_notice_and_leave_fails_closed(monkeypatch):
     async def check():
         service, ctx, channel = setup(monkeypatch)
@@ -326,6 +405,7 @@ def test_auto_enrollment_needs_no_discord_notice_and_leave_fails_closed(monkeypa
 def test_pending_arrival_cannot_speak_after_session_stop(monkeypatch):
     async def check():
         service, ctx, channel = setup(monkeypatch)
+        monkeypatch.setattr("voice_conversation.integration.random.random", lambda: 0.75)
         ctx.author.guild = ctx.guild
         session = NS(
             active=True, participants={1}, busy=lambda: True,

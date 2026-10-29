@@ -262,6 +262,36 @@ def test_completed_chunks_only_memory():
     run(check())
 
 
+def test_confirmed_interruption_gets_brief_acknowledgement_but_urgent_does_not():
+    async def check():
+        s = setup()
+        s.generation, s.current_user = 1, 1
+        s.interruption = {"user_id": 1, "progress": 0.25, "was_speaking": True}
+        await s.answer(1, "Scaramouche, wait", 1, 0)
+        spoken = s.remember.await_args.args[1]
+        assert any(phrase in spoken for phrase in ("interrupted me", "couldn't wait", "cut me off"))
+        assert "A complete answer." in spoken
+        assert s.interruption is None
+        s.interruption = {"user_id": 1, "progress": 0.25, "was_speaking": True}
+        s.generation = 2
+        await s.answer(1, "I'm in immediate danger", 2, 0)
+        assert s.remember.await_args.args[1] == "A complete answer."
+        await s.stop()
+
+    run(check())
+
+
+def test_interruption_before_playback_does_not_claim_to_be_cut_off():
+    async def check():
+        s = setup()
+        s.generation, s.current_user = 1, 1
+        s.interruption = {"user_id": 1, "progress": 0, "was_speaking": False}
+        await s.answer(1, "Scaramouche, wait", 1, 0)
+        assert s.remember.await_args.args[1] == "A complete answer."
+        await s.stop()
+    run(check())
+
+
 def test_provider_jobs_bounded_after_repeated_cancellation():
     async def check():
         s = setup()
@@ -594,6 +624,51 @@ def test_keyword_diagnostics_distinguish_detection_from_late_arrival():
         task.cancel()
         await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), 2)
 
+    run(check())
+
+
+def test_keyword_barge_in_from_enrolled_nonfocused_speaker():
+    async def check():
+        s = setup()
+        s.consent(2, True)
+        s.focus, s.focus_until = 1, time.monotonic() + 90
+        s.stt.transcribe.return_value = "Scaramouche, stop"
+        s.response_task = asyncio.create_task(asyncio.sleep(30))
+        worker = asyncio.create_task(s.transcribe_loop())
+        s.enqueue(Utterance(2, b"audio", time.monotonic(), time.monotonic()))
+        for _ in range(50):
+            if s.metrics["interrupt_attempted"]:
+                break
+            await asyncio.sleep(0.01)
+        assert s.metrics["interrupt_keyword_detected"] == 1
+        assert s.metrics["interrupt_attempted"] == 1
+        assert s.playback.stop.await_count >= 1
+        await s.stop()
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
+
+    run(check())
+
+
+def test_nonfocused_speaker_saying_no_does_not_interrupt():
+    async def check():
+        s = setup()
+        s.consent(2, True)
+        s.focus, s.focus_until = 1, time.monotonic() + 90
+        s.stt.transcribe.return_value = "No, I don't think so"
+        s.response_task = asyncio.create_task(asyncio.sleep(30))
+        worker = asyncio.create_task(s.transcribe_loop())
+        s.enqueue(Utterance(2, b"audio", time.monotonic(), time.monotonic()))
+        for _ in range(50):
+            if s.metrics["stt_success"]:
+                break
+            await asyncio.sleep(0.01)
+        assert s.metrics["stt_success"] == 1
+        assert s.metrics["interrupt_attempted"] == 0
+        s.playback.stop.assert_not_awaited()
+        await s.stop()
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
     run(check())
 
 

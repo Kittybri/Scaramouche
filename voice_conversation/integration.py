@@ -21,11 +21,12 @@ from .speech import GroqSTT, Limits
 
 class VoiceConversation:
     def __init__(
-        self, bot, mem, name, respond, tts, stt_key, owner_id=0, on_spoken=None
+        self, bot, mem, name, respond, tts, stt_key, owner_id=0, on_spoken=None, partner_id=0
     ):
         self.bot, self.mem, self.name = bot, mem, name
         self.respond, self.tts, self.stt_key = respond, tts, stt_key
         self.owner_id = owner_id
+        self.partner_id = partner_id
         self.on_spoken = on_spoken
         self.sessions = {}
         self.features = None
@@ -113,6 +114,16 @@ class VoiceConversation:
             ):
                 await self.leave(member.guild.id)
             return
+        if member.bot:
+            # Bots are never listeners. Revoking one would drain queued human
+            # PCM in Session.consent(False), even though it was never enrolled.
+            if (
+                member.id == self.partner_id
+                and getattr(before.channel, "id", None) != session.channel_id
+                and getattr(after.channel, "id", None) == session.channel_id
+            ):
+                self.queue_partner_arrival(session, member)
+            return
         if getattr(after.channel, "id", None) != session.channel_id:
             task = self.greeting_tasks.pop((member.guild.id, member.id), None)
             if task:
@@ -124,7 +135,42 @@ class VoiceConversation:
             and getattr(before.channel, "id", None) != session.channel_id
         ):
             if await self.enroll(session, member, announce=True):
+                session.focus, session.focus_until = member.id, time.monotonic() + 90
                 self.queue_greeting(session, member)
+
+    def queue_partner_arrival(self, session, member):
+        key = (member.guild.id, member.id)
+        if key in self.greeting_tasks:
+            return
+
+        async def greet():
+            try:
+                deadline = time.monotonic() + 20
+                while session.active and self.sessions.get(member.guild.id) is session:
+                    if getattr(getattr(member.voice, "channel", None), "id", None) != session.channel_id:
+                        return
+                    if not session.busy() and not session.segmenter.users and session.jobs.empty():
+                        uid = session.initiator if session.initiator in session.participants else next(iter(session.participants), None)
+                        if uid is None:
+                            return
+                        lines = (
+                            ("Wanderer just joined. There goes the peace.", "Oh, Wanderer is here. How unfortunate for everyone.")
+                            if self.name.lower() == "scaramouche"
+                            else ("Scaramouche just joined. Try not to encourage him.", "Scaramouche is here. I noticed.")
+                        )
+                        await session.submit(uid, "", reply=random.choice(lines))
+                        return
+                    if time.monotonic() >= deadline:
+                        return
+                    await asyncio.sleep(0.2)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                session.decision("partner_arrival_greeting_failed", member.id)
+
+        task = asyncio.create_task(greet())
+        self.greeting_tasks[key] = task
+        task.add_done_callback(lambda done: self.greeting_tasks.pop(key, None))
 
     async def enroll(self, session, member, *, announce=False):
         if member.bot or not session.active:
@@ -157,6 +203,9 @@ class VoiceConversation:
         seen[member.id] = min(255, seen.get(member.id, 0) + 1)
         if len(seen) > 128:
             seen.pop(next(iter(seen)))
+        # An arrival is noticed even when he chooses not to comment on it.
+        if random.random() < 0.5:
+            return
 
         async def greet():
             try:
@@ -294,6 +343,18 @@ class VoiceConversation:
         action = parts[0]
         session = self.sessions.get(ctx.guild.id)
         channel = getattr(getattr(ctx.author, "voice", None), "channel", None)
+        if action in {"start", "join"} and channel is None:
+            candidates = []
+            for vc in getattr(ctx.guild, "voice_channels", ()):
+                permissions = vc.permissions_for(ctx.guild.me)
+                if permissions.view_channel and permissions.connect and permissions.speak:
+                    candidates.append(vc)
+            text_name = getattr(getattr(ctx, "channel", None), "name", "").casefold()
+            matching = [vc for vc in candidates if vc.name.casefold() == text_name]
+            if len(matching) == 1:
+                channel = matching[0]
+            elif len(candidates) == 1:
+                channel = candidates[0]
         admin = bool(
             ctx.author.id == self.owner_id or ctx.author.guild_permissions.manage_guild
         )
@@ -350,7 +411,7 @@ class VoiceConversation:
         if not channel:
             await self.send(
                 ctx,
-                "Join a voice channel in this server first, then ask me to join you.",
+                "I need an unambiguous voice channel here. Join one yourself or ask from a text channel with the same name.",
             )
             return
         if action in {"start", "join"}:
@@ -445,7 +506,8 @@ class VoiceConversation:
                     on_spoken_leave=lambda uid: self.spoken_leave(ctx.guild.id, session, uid),
                     limits=Limits.from_env(),
                 )
-                session.consent(ctx.author.id, True)
+                if getattr(getattr(getattr(ctx.author, "voice", None), "channel", None), "id", None) == channel.id:
+                    session.consent(ctx.author.id, True)
                 self.sessions[ctx.guild.id] = session
                 if self.features:
                     self.features.attach(session, ctx.guild.id)
@@ -457,6 +519,8 @@ class VoiceConversation:
                         self.arrivals_seen.setdefault(ctx.guild.id, {})[
                             member.id
                         ] = 1
+                if session.participants and session.focus not in session.participants:
+                    session.focus, session.focus_until = next(iter(session.participants)), time.monotonic() + 90
                 await self.status(ctx)
             except Exception:
                 if session:
