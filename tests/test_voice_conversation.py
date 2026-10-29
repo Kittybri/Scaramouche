@@ -266,16 +266,25 @@ def test_confirmed_interruption_gets_brief_acknowledgement_but_urgent_does_not()
     async def check():
         s = setup()
         s.generation, s.current_user = 1, 1
-        s.interruption = {"user_id": 1, "progress": 0.25, "was_speaking": True}
+        s.interruption = {
+            "user_id": 1, "progress": 0.25, "was_speaking": True,
+            "playback_stopped_at": time.monotonic(),
+        }
         await s.answer(1, "Scaramouche, wait", 1, 0)
-        spoken = s.remember.await_args.args[1]
-        assert any(phrase in spoken for phrase in ("interrupted me", "couldn't wait", "cut me off"))
-        assert "A complete answer." in spoken
+        spoken = [call.args[1] for call in s.remember.await_args_list]
+        assert len(spoken) == 2
+        assert any(phrase in spoken[0] for phrase in ("interrupt me", "couldn't wait", "cut me off"))
+        assert spoken[1] == "A complete answer."
+        assert s.metrics["interrupt_ack_playback_completed"] == 1
         assert s.interruption is None
-        s.interruption = {"user_id": 1, "progress": 0.25, "was_speaking": True}
+        s.interruption = {
+            "user_id": 1, "progress": 0.25, "was_speaking": True,
+            "playback_stopped_at": time.monotonic(),
+        }
         s.generation = 2
         await s.answer(1, "I'm in immediate danger", 2, 0)
         assert s.remember.await_args.args[1] == "A complete answer."
+        assert s.metrics["interrupt_ack_playback_completed"] == 1
         await s.stop()
 
     run(check())
@@ -289,6 +298,214 @@ def test_interruption_before_playback_does_not_claim_to_be_cut_off():
         await s.answer(1, "Scaramouche, wait", 1, 0)
         assert s.remember.await_args.args[1] == "A complete answer."
         await s.stop()
+    run(check())
+
+
+@pytest.mark.parametrize("message", [
+    "My friend is having a seizure, help me",
+    "I think my dad is having a stroke",
+    "I need to get to a hospital now",
+    "Please help me",
+    "I am hurt",
+    "My house is burning and I need a doctor",
+    "I'm in pain and I feel unsafe and scared",
+    "My friend collapsed",
+    "I think I might faint",
+    "My mother is not waking up",
+    "Someone attacked my friend",
+])
+def test_possible_emergency_interruption_skips_quip(message):
+    async def check():
+        s = setup()
+        s.generation, s.current_user = 1, 1
+        s.interruption = {
+            "user_id": 1, "progress": 0.25, "was_speaking": True,
+            "playback_stopped_at": time.monotonic(),
+        }
+        await s.answer(1, message, 1, 0)
+        assert s.metrics["interrupt_ack_attempted"] == 0
+        assert s.playback.play.await_count == 1
+        assert s.remember.await_count == 1
+        assert s.remember.await_args.args[1] == "A complete answer."
+        await s.stop()
+
+    run(check())
+
+
+def test_interruption_ack_speaks_before_full_reply_finishes():
+    async def check():
+        llm_started, release_llm = asyncio.Event(), asyncio.Event()
+
+        async def slow_answer(*args):
+            llm_started.set()
+            await release_llm.wait()
+            return "The actual answer."
+
+        s = setup(respond=slow_answer)
+        s.generation, s.current_user = 1, 1
+        s.interruption = {
+            "user_id": 1, "progress": 0.25, "was_speaking": True,
+            "playback_stopped_at": time.monotonic(),
+        }
+        task = asyncio.create_task(s.answer(1, "Scaramouche, wait", 1, 0))
+        await asyncio.wait_for(llm_started.wait(), 1)
+
+        async def acknowledged():
+            while not s.metrics["interrupt_ack_playback_completed"]:
+                await asyncio.sleep(0.001)
+
+        await asyncio.wait_for(acknowledged(), 1)
+        assert s.playback.play.await_count == 1
+        assert s.remember.await_count == 1
+        assert "actual answer" not in s.remember.await_args.args[1].lower()
+        release_llm.set()
+        await asyncio.wait_for(task, 1)
+        assert s.playback.play.await_count == 2
+        assert [call.args[1] for call in s.remember.await_args_list][-1] == "The actual answer."
+        await s.stop()
+
+    run(check())
+
+
+def test_interruption_ack_is_not_remembered_when_playback_fails():
+    async def check():
+        s = setup()
+        s.playback.play = AsyncMock(side_effect=[False, True])
+        s.generation, s.current_user = 1, 1
+        s.interruption = {
+            "user_id": 1, "progress": 0.25, "was_speaking": True,
+            "playback_stopped_at": time.monotonic(),
+        }
+        await s.answer(1, "Scaramouche, wait", 1, 0)
+        assert s.metrics["interrupt_ack_playback_completed"] == 0
+        assert s.remember.await_count == 1
+        assert "A complete answer." in s.remember.await_args.args[1]
+        assert any(
+            phrase in s.remember.await_args.args[1]
+            for phrase in ("interrupt me", "couldn't wait", "cut me off")
+        )
+        await s.stop()
+
+    run(check())
+
+
+def test_slow_interruption_ack_falls_back_without_blocking_full_answer(monkeypatch):
+    monkeypatch.setattr("voice_conversation.session._INTERRUPT_ACK_TTS_TIMEOUT", 0.01)
+
+    async def check():
+        async def slow_synthesis(_uid, _text):
+            await asyncio.sleep(0.04)
+            return b"audio"
+
+        s = setup(synthesize=slow_synthesis)
+        s.generation, s.current_user = 1, 1
+        s.interruption = {
+            "user_id": 1, "progress": 0.25, "was_speaking": True,
+            "playback_stopped_at": time.monotonic(),
+        }
+        await asyncio.wait_for(s.answer(1, "Scaramouche, stop", 1, 0), 1)
+        assert s.metrics["interrupt_ack_unavailable"] == 1
+        assert s.metrics["interrupt_ack_playback_completed"] == 0
+        assert s.playback.play.await_count == 1
+        assert s.remember.await_count == 1
+        assert "A complete answer." in s.remember.await_args.args[1]
+        await s.stop()
+
+    run(check())
+
+
+def test_stuck_interruption_ack_playback_is_bounded(monkeypatch):
+    monkeypatch.setattr("voice_conversation.session._INTERRUPT_ACK_PLAYBACK_TIMEOUT", 0.01)
+
+    async def check():
+        calls = 0
+
+        async def slow_first_play(_audio):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                await asyncio.sleep(30)
+            return True
+
+        s = setup()
+        s.playback.play = slow_first_play
+        s.generation, s.current_user = 1, 1
+        s.interruption = {
+            "user_id": 1, "progress": 0.25, "was_speaking": True,
+            "playback_stopped_at": time.monotonic(),
+        }
+        await asyncio.wait_for(s.answer(1, "Scaramouche, stop", 1, 0), 1)
+        assert calls == 2
+        assert s.metrics["interrupt_ack_unavailable"] == 1
+        assert s.metrics["interrupt_ack_playback_completed"] == 0
+        assert s.remember.await_count == 1
+        assert "A complete answer." in s.remember.await_args.args[1]
+        s.playback.stop.assert_awaited()
+        await s.stop()
+
+    run(check())
+
+
+def test_interruption_without_live_playback_does_not_claim_to_be_cut_off():
+    async def check():
+        s = setup()
+        s.playback.vc = NS(is_playing=lambda: False)
+        s.state = State.BOT_SPEAKING
+        s.response_task = asyncio.create_task(asyncio.sleep(30))
+        await s.interrupt(1, time.monotonic())
+        assert not s.interruption["was_speaking"]
+        await s.stop()
+
+    run(check())
+
+
+def test_wander_nickname_handover_only_at_direct_address():
+    async def check():
+        s = setup()
+        for addressed in (
+            "Wander, can you hear me?", "Hey Wander!", "um Wander",
+            "Wander I have a question", "Hey, Wander, are you there?",
+        ):
+            s.focus, s.focus_until = 1, time.monotonic() + 60
+            assert not s.relevant(1, addressed)
+            assert s.focus is None
+        for ordinary in (
+            "I wander around sometimes", "Wander through the garden",
+            "Wander across the garden", "I wonder what he thinks",
+        ):
+            s.focus, s.focus_until = 1, time.monotonic() + 60
+            assert s.relevant(1, ordinary)
+            assert s.focus == 1
+        await s.stop()
+
+    run(check())
+
+
+def test_interrupting_acknowledgement_does_not_trigger_another_acknowledgement():
+    async def check():
+        playing = asyncio.Event()
+
+        async def slow_play(_audio):
+            playing.set()
+            await asyncio.sleep(30)
+            return True
+
+        s = setup()
+        s.playback.play = slow_play
+        s.generation, s.current_user = 1, 1
+        s.interruption = {
+            "user_id": 1, "progress": 0.25, "was_speaking": True,
+            "playback_stopped_at": time.monotonic(),
+        }
+        s.response_task = asyncio.create_task(s.answer(1, "Scaramouche, wait", 1, 0))
+        await asyncio.wait_for(playing.wait(), 1)
+        assert s._acknowledgement_playing
+        await s.interrupt(1, time.monotonic())
+        assert not s.interruption["was_speaking"]
+        await asyncio.gather(s.response_task, return_exceptions=True)
+        s.remember.assert_not_awaited()
+        await s.stop()
+
     run(check())
 
 

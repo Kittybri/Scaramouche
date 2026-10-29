@@ -15,6 +15,24 @@ from enum import Enum
 
 from .speech import Limits, Segmenter, chunks
 
+_INTERRUPT_ACK_TTS_TIMEOUT = 5.0
+_INTERRUPT_ACK_PLAYBACK_TIMEOUT = 8.0
+
+
+def needs_immediate_voice_help(text: str) -> bool:
+    """Do not put a character quip before a possible request for real help."""
+    return bool(re.search(
+        r"\b(?:help|emergency|ambulance|hospital|paramedic|medic(?:al)?|doctor|"
+        r"seizure|stroke|heart attack|chest pain|can'?t breathe|cannot breathe|"
+        r"breath(?:e|ing)|bleed(?:ing)?|overdose|poison(?:ed|ing)?|"
+        r"suicid(?:e|al)|self[- ]harm|injur(?:y|ed)|hurt|pain|"
+        r"unconscious|unresponsive|faint(?:ed|ing)?|collaps(?:e|ed)|"
+        r"(?:not|isn'?t|won'?t) waking|attack(?:ed)?|assault(?:ed)?|"
+        r"fire|burn(?:ing)?|danger|unsafe|dying|dead|abuse|trauma|"
+        r"crying|scared|panic|password|secret|911|999|112)\b",
+        text or "", re.I,
+    ))
+
 
 def is_interrupt_keyword(text: str, name: str) -> bool:
     """Recognize short spoken barge-in commands despite ordinary STT variation."""
@@ -176,6 +194,7 @@ class Session:
         self.metrics = Counter()
         self.events = deque(maxlen=16)
         self.interruption = None
+        self._acknowledgement_playing = False
         self.completed, self.total = 0, 0
         self.last_speech, self.started = 0.0, time.monotonic()
         self.reported_failures = set()
@@ -358,7 +377,25 @@ class Session:
         # An explicit handover releases this bot's follow-up focus. Merely
         # discussing the other character is not a handover.
         partner = r"wanderer|hat[ -]?guy" if self.name == "scaramouche" else r"scaramouche|scara|balladeer"
-        if re.match(r"^(?:(?:hey|okay|ok|hi|hello)\W+)?(?:" + partner + r")\b", text.strip(), re.I):
+        partner_opening = re.match(
+            r"^(?:(?:hey|okay|ok|hi|hello|um|uh|please)\W+)?(?:" + partner + r")\b",
+            text.strip(), re.I,
+        )
+        # Mirror Wanderer's spoken nickname gate, so one direct address cannot
+        # make both focused bots answer. Ordinary uses of the verb remain here.
+        if self.name == "scaramouche" and not partner_opening:
+            words = re.findall(r"[a-z0-9]+", (text or "").lower())
+            while words and words[0] in {"hey", "okay", "ok", "um", "uh", "please"}:
+                words.pop(0)
+            partner_opening = bool(
+                words
+                and words[0] == "wander"
+                and (len(words) == 1 or words[1] not in {
+                    "through", "around", "about", "into", "across", "off",
+                    "over", "along", "back", "away", "up", "out", "down", "to",
+                })
+            )
+        if partner_opening:
             if uid == self.focus:
                 self.focus, self.focus_until = None, 0
             return False
@@ -590,6 +627,43 @@ class Session:
         task.add_done_callback(finished)
         return await asyncio.wait_for(asyncio.shield(task), 90)
 
+    async def _speak_interruption_acknowledgement(self, uid, generation, epoch, start, line):
+        """Play the brief reaction while the full answer is being generated."""
+        if not self.current(generation, uid, epoch):
+            return False
+        self.state = State.SYNTHESIZING
+        audio = await asyncio.wait_for(
+            self.provider("tts", lambda: self.synthesize(uid, line)),
+            _INTERRUPT_ACK_TTS_TIMEOUT,
+        )
+        if not self.current(generation, uid, epoch):
+            return False
+        if not audio:
+            raise RuntimeError("tts_unavailable")
+        self.state = State.BOT_SPEAKING
+        self.metrics["first_audio_ms"] = round((time.monotonic() - start) * 1000)
+        self._acknowledgement_playing = True
+        try:
+            delivered = await asyncio.wait_for(
+                self.playback.play(audio), _INTERRUPT_ACK_PLAYBACK_TIMEOUT
+            )
+        finally:
+            self._acknowledgement_playing = False
+        if not delivered or not self.current(generation, uid, epoch):
+            self.decision("playback_not_delivered", uid)
+            return False
+        self.completed += 1
+        self.total += 1
+        self.metrics["interrupt_ack_playback_completed"] += 1
+        self.metrics["spoken_chunks"] += 1
+        self.decision("playback_completed", uid)
+        self.recent_outputs.append(re.sub(r"\W+", " ", line.lower()).strip())
+        if self.focus == uid:
+            self.focus_until = time.monotonic() + 90
+        await self.remember(uid, line)
+        await self.feature_event("bot_spoken", uid, line, {"duo": False})
+        return True
+
     async def answer(
         self,
         uid,
@@ -607,18 +681,34 @@ class Session:
         context = "Voice conversation: output spoken dialogue only; no narration or stage directions. No artificial sentence limit."
         context += " " + feature_context
         interrupted = bool(self.interruption and self.interruption["user_id"] == uid)
+        acknowledge = False
         if interrupted:
             context += (
                 " You were interrupted; only completed chunks were heard. Respond to the new utterance naturally. "
                 "Do not treat it as a lasting grievance; genuine distress takes priority."
             )
-            if self.interruption.get("was_speaking"):
-                context += " For a non-urgent interruption, briefly acknowledge being cut off in your own sharp voice, then answer."
-            was_speaking = self.interruption.get("was_speaking", False)
             context += (
                 f" Completed chunk fraction: {self.interruption['progress']:.2f}."
             )
+            from .personality import urgent
+
+            acknowledge = bool(
+                self.interruption.get("was_speaking")
+                and self.interruption.get("playback_stopped_at") is not None
+                and reply_override is None
+                and audio_override is None
+                and not feature_kind
+                and not urgent(text)
+                and not needs_immediate_voice_help(text)
+                and not re.search(r"\bin (?:immediate )?danger\b", text, re.I)
+            )
+            if acknowledge:
+                context += (
+                    " A brief spoken reaction to being cut off is being attempted before your answer. "
+                    "Do not repeat it or comment on the interruption again; answer the new utterance."
+                )
             self.interruption = None
+        reply_task = None
         try:
             if feature_kind and (
                 not self.feature_router
@@ -632,27 +722,45 @@ class Session:
                 return
             self.state = State.THINKING
             tick = time.monotonic()
-            reply = (
-                reply_override
-                if reply_override is not None
-                else await self.provider(
-                    "llm", lambda: self.respond(uid, text, context)
+            if acknowledge:
+                line = random.choice((
+                    "Why did you interrupt me?",
+                    "You couldn't wait until I finished?",
+                    "Bold of you to cut me off. Go on.",
+                ))
+                reply_task = asyncio.create_task(
+                    self.provider("llm", lambda: self.respond(uid, text, context))
                 )
-            )
-            if interrupted and was_speaking and reply_override is None:
-                from .personality import urgent
-
-                if (
-                    reply
-                    and not urgent(text)
-                    and not re.search(r"\bin (?:immediate )?danger\b", text, re.I)
-                    and not re.search(r"\b(interrupt(?:ed|ing)?|cut me off|cutting me off)\b", reply, re.I)
+                self.metrics["interrupt_ack_attempted"] += 1
+                try:
+                    acknowledged = await self._speak_interruption_acknowledgement(
+                        uid, generation, epoch, start, line
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    acknowledged = False
+                    self.decision("interrupt_ack_unavailable", uid)
+                    with contextlib.suppress(Exception):
+                        await asyncio.wait_for(self.playback.stop(), 2)
+                self.state = State.THINKING
+                reply = await reply_task
+                if acknowledged and reply and reply.strip().lower().startswith(line.lower()):
+                    reply = reply.strip()[len(line):].lstrip()
+                elif not acknowledged and reply and not re.search(
+                    r"\b(interrupt(?:ed|ing)?|cut me off|cutting me off)\b", reply, re.I
                 ):
-                    reply = random.choice((
-                        "You interrupted me. What is it?",
-                        "Tch. You couldn't wait until I finished?",
-                        "Bold of you to cut me off. Go on.",
-                    )) + " " + reply
+                    # If fast TTS/playback failed, keep the old delayed wording
+                    # rather than silently losing the requested reaction.
+                    reply = f"{line} {reply}"
+            else:
+                reply = (
+                    reply_override
+                    if reply_override is not None
+                    else await self.provider(
+                        "llm", lambda: self.respond(uid, text, context)
+                    )
+                )
             self.metrics["response_latency_ms"] = round(
                 (time.monotonic() - tick) * 1000
             )
@@ -662,7 +770,7 @@ class Session:
             pieces = chunks(reply[:12000])
             if not pieces:
                 self.decision("empty_response", uid)
-            self.total = len(pieces)
+            self.total = self.completed + len(pieces)
             for part in pieces:
                 if not self.current(generation, uid, epoch):
                     return
@@ -713,6 +821,10 @@ class Session:
                     await self.playback.stop()
             await self.failure("response_or_playback_unavailable")
         finally:
+            if reply_task is not None:
+                if not reply_task.done():
+                    reply_task.cancel()
+                await asyncio.gather(reply_task, return_exceptions=True)
             if generation == self.generation and self.active:
                 self.state = State.LISTENING
 
@@ -724,7 +836,11 @@ class Session:
         ):
             return
         confirmed = time.monotonic()
-        was_speaking = self.state == State.BOT_SPEAKING
+        was_speaking = self.state == State.BOT_SPEAKING and not self._acknowledgement_playing
+        voice_client = getattr(self.playback, "vc", None)
+        if was_speaking and voice_client is not None:
+            with contextlib.suppress(Exception):
+                was_speaking = bool(voice_client.is_playing())
         self.clear_pending_response()
         self.state = State.INTERRUPTING
         self.generation += 1
