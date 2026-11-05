@@ -24,6 +24,8 @@ This project explores how a character bot can retain conversational history and 
 | Persistent user and conversation state | `memory.py` |
 | Relationship context | `relationship_engine.py` |
 | Response repetition controls | `anti_repeat.py` and [offline tests](tests/test_anti_repeat.py) |
+| Text safety, mentions and keyword matching | `text_utils.py`, `safety.py`, `limits.py` and their [tests](tests/) |
+| Model access (key rotation, fallback) | `llm.py` |
 | Optional voice output | `voice_handler.py` |
 | A real diagnosis and narrow repair | [PDF retrieval case study](https://github.com/Kittybri/agent-repair-lab/blob/main/docs/pdf-retrieval.md) |
 | Design tradeoffs and acceptance checks | [Turn ownership case study](https://github.com/Kittybri/agent-repair-lab/blob/main/docs/turn-ownership.md) |
@@ -34,7 +36,7 @@ This project explores how a character bot can retain conversational history and 
 python -m unittest discover -s tests -v
 ```
 
-No Discord token or paid API is needed. GitHub Actions runs these checks on Python 3.11 and 3.12. They cover response-history isolation, bounded history, duplicate detection, and fresh fallback selection. They are not end-to-end bot or model-quality tests.
+No Discord token or paid API is needed. GitHub Actions runs these checks on Python 3.11 and 3.12. They cover response-history isolation, bounded history, duplicate detection, narration stripping, boundary-aware keyword matching, mention safety, rate limiting, model fallback, search-result parsing, database privacy scoping, and a mock-Discord run through the message pipeline. They are not live end-to-end or model-quality tests.
 
 For live setup, see [quickstart](docs/quickstart.md). For a reproducible, credential-free engineering demonstration, prepare a task in the separate [repair lab](https://github.com/Kittybri/agent-repair-lab).
 

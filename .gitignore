@@ -4,3 +4,8 @@ __pycache__/
 *.pyc
 *.pyo
 .DS_Store
+.venv/
+.ruff_cache/
+.env.*
+!.env.example
+.mypy_cache/
