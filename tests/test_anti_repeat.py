@@ -43,6 +43,25 @@ class AntiRepeatTests(unittest.TestCase):
             "A completely different answer.",
         )
 
+    def test_shared_opening_alone_is_not_repetition(self):
+        self.assertFalse(anti_repeat.looks_repetitive(
+            "I do not know the answer to that, honestly speaking.", ["I do not know where she went last night."]))
+
+    def test_signature_openers_match_whole_words_only(self):
+        counts = anti_repeat._phrase_counts("scaramouche", ["Tchaikovsky wrote it", "Tchaikovsky again", "Tch. no", "Tch, again"])
+        self.assertEqual(dict(counts), {"tch": 2})
+
+    def test_curly_apostrophe_openers_are_detected(self):
+        self.assertEqual(anti_repeat.detect_opening_phrase("wanderer", "I\u2019ve got nothing for you"), "i've got nothing")
+
+    def test_unknown_bot_name_still_gets_a_fallback(self):
+        self.assertTrue(anti_repeat.fallback_reply("someone-else", []))
+
+    def test_replaced_opener_keeps_the_rest_as_a_new_sentence(self):
+        out = anti_repeat.diversify_reply("scaramouche", "How very quaint, you tried.", ["How quaint.", "How quaint, really."])
+        self.assertTrue(out.endswith("You tried."), out)
+        self.assertFalse(out.lower().startswith("how"))
+
 
 if __name__ == "__main__":
     unittest.main()

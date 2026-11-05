@@ -1,5 +1,31 @@
 import re
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+from text_utils import has_keyword, normalize_text
+
+
+def _has(lowered: str, tokens) -> bool:
+    """Boundary-aware keyword test (``"ei"`` no longer matches ``"ceiling"``). ``lowered`` is already lower-case."""
+    return has_keyword(lowered, tokens)
+
+
+# Talking about *another bot* - "prefer" / "switch to" alone are far too common to count.
+OTHER_BOT_RE = re.compile(
+    r"\b(?:other|different|better|another)\s+bot\b"
+    r"|\bprefer(?:s|red|ring)?\s+(?:the\s+)?(?:other|different|another|wanderer|him|that\s+one|his)\b"
+    r"|\bswitch(?:ing|ed)?\s+(?:over\s+)?to\s+(?:the\s+)?(?:other|different|another|wanderer)\b",
+    re.IGNORECASE,
+)
+_DIRECTED_ANNOYANCE_RE = re.compile(
+    r"\byou(?:'re|re| are| r)\b[^.!?\n]{0,15}\bannoying\b|\bannoying\b[^.!?\n]{0,12}\b(?:you|bot)\b", re.IGNORECASE
+)
+_DISMISSIVE_WHATEVER_RE = re.compile(r"^\W*whatever\W*$|\bwhatever\W*$", re.IGNORECASE)
+
+
+def mentions_other_bot(text: str | None) -> bool:
+    return bool(OTHER_BOT_RE.search(normalize_text(text)))
 
 
 STYLE_KEYS = ("playful", "gentle", "curious", "vulnerable", "intense", "lore", "teasing")
@@ -106,27 +132,27 @@ def normalize_style_profile(profile: dict | None) -> dict:
 
 def analyze_style_deltas(text: str) -> dict:
     content = (text or "").strip()
-    lowered = content.lower()
+    lowered = normalize_text(content)
     deltas = default_style_profile()
 
-    if any(token in lowered for token in ["lol", "lmao", "haha", "hehe", "joking", "kidding"]):
+    if _has(lowered, ["lol", "lmao", "haha", "hehe", "joking", "kidding"]):
         deltas["playful"] += 3
         deltas["teasing"] += 1
-    if any(token in lowered for token in ["thank", "thanks", "appreciate", "care", "eat", "sleep", "rest", "be safe"]):
+    if _has(lowered, ["thank", "thanks", "appreciate", "care", "eat", "sleep", "rest", "be safe"]):
         deltas["gentle"] += 2
-    if "?" in content or any(lowered.startswith(prefix) for prefix in ["what", "why", "how", "when", "tell me", "explain"]):
+    if "?" in content or lowered.startswith(("what", "why", "how", "when", "tell me", "explain")):
         deltas["curious"] += 2
     if len(content) > 120:
         deltas["curious"] += 1
-    if any(token in lowered for token in ["sorry", "miss you", "alone", "scared", "hurt", "cry", "lonely", "love", "confess", "feel", "feelings"]):
+    if _has(lowered, ["sorry", "miss you", "alone", "scared", "hurt", "cry", "crying", "lonely", "love", "confess", "feel", "feelings"]):
         deltas["vulnerable"] += 3
-    if any(token in lowered for token in ["shut up", "go away", "idiot", "stupid", "hate", "annoying", "prefer", "other bot", "different bot"]):
+    if _has(lowered, ["shut up", "go away", "idiot", "stupid", "hate", "annoying"]) or OTHER_BOT_RE.search(lowered):
         deltas["intense"] += 3
-    if content.count("!") >= 2 or content.isupper():
+    if content.count("!") >= 2 or (sum(ch.isalpha() for ch in content) >= 5 and content.isupper()):
         deltas["intense"] += 2
-    if any(token in lowered for token in ["genshin", "teyvat", "fatui", "harbinger", "archon", "irminsul", "nahida", "ei", "traveler", "traveller"]):
+    if _has(lowered, ["genshin", "teyvat", "fatui", "harbinger", "archon", "irminsul", "nahida", "ei", "traveler", "traveller"]):
         deltas["lore"] += 3
-    if any(token in lowered for token in ["brat", "coward", "you wish", "as if", "sure you do", "keep talking"]):
+    if _has(lowered, ["brat", "coward", "you wish", "as if", "sure you do", "keep talking"]):
         deltas["teasing"] += 2
 
     return deltas
@@ -225,30 +251,18 @@ def describe_emotional_arc(bot_name: str, arc: str) -> str:
 
 
 def detect_conflict_signal(text: str) -> bool:
-    lowered = (text or "").lower()
-    return any(
-        token in lowered
-        for token in [
-            "shut up",
-            "go away",
-            "leave me alone",
-            "hate you",
-            "other bot",
-            "different bot",
-            "prefer",
-            "switch to",
-            "annoying",
-            "whatever",
-            "you suck",
-        ]
+    lowered = normalize_text(text)
+    return bool(
+        _has(lowered, ["shut up", "go away", "leave me alone", "hate you", "you suck"])
+        or OTHER_BOT_RE.search(lowered)
+        or _DIRECTED_ANNOYANCE_RE.search(lowered)
+        or _DISMISSIVE_WHATEVER_RE.search(lowered)
     )
 
 
 def detect_repair_signal(text: str) -> bool:
-    lowered = (text or "").lower()
-    return any(
-        token in lowered
-        for token in [
+    lowered = normalize_text(text)
+    return _has(lowered, [
             "sorry",
             "i'm sorry",
             "i am sorry",
@@ -262,18 +276,15 @@ def detect_repair_signal(text: str) -> bool:
             "thank you",
             "are you okay",
             "are u okay",
-        ]
-    )
+        ])
 
 
 def extract_callback_candidate(text: str) -> str:
     content = " ".join((text or "").strip().split())
     if len(content) < 24:
         return ""
-    lowered = content.lower()
-    if any(
-        token in lowered
-        for token in [
+    lowered = normalize_text(content)
+    if _has(lowered, [
             "i love",
             "i miss",
             "i'm scared",
@@ -287,11 +298,12 @@ def extract_callback_candidate(text: str) -> str:
             "i need you",
             "i need u",
             "i trust you",
-            "stay",
-        ]
-    ):
+            "stay with me",
+            "please stay",
+            "don't leave me",
+        ]):
         return content[:220]
-    if len(content) > 140:
+    if len(content) > 140 and "http" not in lowered and "```" not in content:
         return content[:220]
     return ""
 
@@ -299,16 +311,16 @@ def extract_callback_candidate(text: str) -> str:
 def callback_relevant(callback_memory: str, text: str) -> bool:
     if not callback_memory:
         return False
-    callback_words = {word for word in re.findall(r"[a-z']+", callback_memory.lower()) if len(word) > 3}
-    text_words = {word for word in re.findall(r"[a-z']+", (text or "").lower()) if len(word) > 3}
+    callback_words = {word for word in re.findall(r"[a-z']+", normalize_text(callback_memory)) if len(word) > 3}
+    text_words = {word for word in re.findall(r"[a-z']+", normalize_text(text)) if len(word) > 3}
     return len(callback_words & text_words) >= 2
 
 
 def detect_topics(text: str) -> list[str]:
-    lowered = (text or "").lower()
+    lowered = normalize_text(text)
     found: list[str] = []
     for topic, hints in TOPIC_HINTS.items():
-        if any(token in lowered for token in hints):
+        if _has(lowered, hints):
             found.append(topic)
     return found[:4]
 
@@ -364,31 +376,31 @@ def relationship_milestone_note(stage: str, respect: int, tension: int) -> str:
 
 
 def detect_banter_theme(text: str) -> str:
-    lowered = (text or "").lower()
-    if any(token in lowered for token in ["pretender", "imposter", "copy", "past self", "future self", "same face"]):
+    lowered = normalize_text(text)
+    if _has(lowered, ["pretender", "imposter", "copy", "past self", "future self", "same face"]):
         return "identity"
-    if any(token in lowered for token in ["weak", "weakness", "soft", "pathetic", "coward"]):
+    if _has(lowered, ["weak", "weakness", "soft", "pathetic", "coward"]):
         return "weakness"
-    if any(token in lowered for token in ["change", "changed", "different", "better now"]):
+    if _has(lowered, ["change", "changed", "different", "better now"]):
         return "change"
-    if any(token in lowered for token in ["creator", "built", "made", "ei", "nahida", "traveler", "traveller"]):
+    if _has(lowered, ["creator", "built", "made", "ei", "nahida", "traveler", "traveller"]):
         return "origins"
-    if any(token in lowered for token in ["prefer", "mine", "jealous", "romance", "love"]):
+    if _has(lowered, ["prefer me", "be mine", "you're mine", "jealous", "romance", "love"]) or OTHER_BOT_RE.search(lowered):
         return "jealousy"
-    if any(token in lowered for token in ["power", "gnosis", "harbinger", "electro", "anemo"]):
+    if _has(lowered, ["power", "gnosis", "harbinger", "electro", "anemo"]):
         return "power"
-    if "hat" in lowered:
+    if _has(lowered, ["hat"]):
         return "hat"
     return "general"
 
 
 def infer_bot_relation_deltas(text: str, theme: str) -> tuple[int, int]:
-    lowered = (text or "").lower()
+    lowered = normalize_text(text)
     respect = 1 if theme in {"power", "origins", "change"} else 0
     tension = 2 if theme in {"identity", "weakness", "jealousy"} else 0
-    if any(token in lowered for token in ["imposter", "pretender", "pathetic", "failure", "weak", "discarded"]):
+    if _has(lowered, ["imposter", "pretender", "pathetic", "failure", "weak", "discarded"]):
         tension += 3
-    if any(token in lowered for token in ["understand", "remember", "still here", "not entirely wrong", "capable", "useful"]):
+    if _has(lowered, ["understand", "remember", "still here", "not entirely wrong", "capable", "useful"]):
         respect += 2
     return respect, tension
 
@@ -432,16 +444,16 @@ def describe_bot_relationship(bot_name: str, relation: dict | None, recent_bante
 
 
 def detect_scenario(text: str, is_dm: bool = False) -> str:
-    lowered = (text or "").lower()
-    if any(token in lowered for token in ["sad", "hurt", "cry", "lonely", "anxious", "overwhelmed", "comfort me", "i need comfort", "i'm scared", "i am scared"]):
+    lowered = normalize_text(text)
+    if _has(lowered, ["sad", "hurt", "cry", "crying", "lonely", "anxious", "overwhelmed", "comfort me", "i need comfort", "i'm scared", "i am scared"]):
         return "emotional_comfort"
-    if any(token in lowered for token in ["fight", "battle", "enemy", "attack", "defend", "protect me", "slash", "kill", "combat", "war"]):
+    if _has(lowered, ["fight", "battle", "enemy", "attack", "defend", "protect me", "slash", "kill", "combat", "war"]):
         return "combat_action"
-    if any(token in lowered for token in ["love", "miss you", "kiss", "date", "mine", "jealous", "stay with me", "trust you", "relationship"]):
+    if _has(lowered, ["love", "miss you", "kiss", "date me", "go on a date", "dating", "be mine", "you're mine", "jealous", "stay with me", "trust you", "relationship"]):
         return "relationship_progression"
-    if any(token in lowered for token in ["genshin", "teyvat", "fatui", "harbinger", "archon", "irminsul", "nahida", "ei", "traveler", "traveller", "inazuma", "sumeru"]):
+    if _has(lowered, ["genshin", "teyvat", "fatui", "harbinger", "archon", "irminsul", "nahida", "ei", "traveler", "traveller", "inazuma", "sumeru"]):
         return "lore_discussion"
-    if any(token in lowered for token in ["who am i", "what am i", "meaning", "purpose", "memory", "change", "forgive", "regret"]):
+    if _has(lowered, ["who am i", "what am i", "meaning", "purpose", "memory", "memories", "change", "forgive", "regret"]):
         return "introspection"
     if is_dm:
         return "private_chat"
@@ -449,19 +461,19 @@ def detect_scenario(text: str, is_dm: bool = False) -> str:
 
 
 def detect_emotional_triggers(text: str) -> list[str]:
-    lowered = (text or "").lower()
+    lowered = normalize_text(text)
     triggers: list[str] = []
-    if any(token in lowered for token in ["jealous", "mine", "prefer me", "other bot", "different bot", "switch to"]):
+    if _has(lowered, ["jealous", "be mine", "you're mine", "you are mine", "prefer me"]) or OTHER_BOT_RE.search(lowered):
         triggers.append("jealousy")
-    if any(token in lowered for token in ["protect me", "stay safe", "be careful", "don't leave", "come back", "are you okay", "are u okay"]):
+    if _has(lowered, ["protect me", "stay safe", "be careful", "don't leave", "come back", "are you okay", "are u okay"]):
         triggers.append("protectiveness")
-    if any(token in lowered for token in ["boring", "bored", "whatever", "nothing", "idc", "i don't care"]):
+    if _has(lowered, ["boring", "bored", "nothing", "idc", "i don't care"]) or _DISMISSIVE_WHATEVER_RE.search(lowered):
         triggers.append("boredom")
-    if any(token in lowered for token in ["why", "how", "what if", "tell me", "explain", "?"]):
+    if _has(lowered, ["why", "how", "what if", "tell me", "explain", "?"]):
         triggers.append("curiosity")
-    if any(token in lowered for token in ["sorry", "thank you", "i appreciate you", "trust you", "miss you", "love you"]):
+    if _has(lowered, ["sorry", "thank you", "i appreciate you", "trust you", "miss you", "love you"]):
         triggers.append("softness")
-    if any(token in lowered for token in ["fight", "battle", "attack", "enemy", "defend", "kill"]):
+    if _has(lowered, ["fight", "battle", "attack", "enemy", "defend", "kill"]):
         triggers.append("combat")
     return triggers[:4]
 
@@ -596,25 +608,38 @@ def progression_milestone_note(bot_name: str, stage: str) -> str:
 
 
 def extract_continuity_hooks(history: list[dict] | None, current_text: str = "") -> list[str]:
+    """Pick up to two older user lines worth echoing back.
+
+    ``history`` is what was said *before* the current message, so every line is a candidate (the
+    current message itself is skipped if the caller already stored it).
+    """
     history = history or []
     user_lines = [
         " ".join((item.get("content") or "").split())
         for item in history
         if item.get("role") == "user" and (item.get("content") or "").strip()
     ]
-    current_lower = (current_text or "").lower()
+    current_lower = normalize_text(" ".join((current_text or "").split()))
     hooks: list[str] = []
 
+    def _candidates():
+        for line in reversed(user_lines):
+            if normalize_text(line) != current_lower:
+                yield line
+
     def _pick(keyword_groups: list[tuple[str, ...]]) -> str:
-        for line in reversed(user_lines[:-1] if len(user_lines) > 1 else user_lines):
-            lowered = line.lower()
-            if lowered == current_lower:
-                continue
-            if any(any(token in lowered for token in group) for group in keyword_groups):
+        for line in _candidates():
+            lowered = normalize_text(line)
+            if any(_has(lowered, group) for group in keyword_groups):
                 return line[:140]
         return ""
 
-    past_insult = _pick([("hate", "shut up", "annoying", "other bot", "prefer", "go away", "whatever")])
+    past_insult = _pick([("hate", "shut up", "annoying", "go away", "whatever")]) or ""
+    if not past_insult:
+        for line in _candidates():
+            if OTHER_BOT_RE.search(normalize_text(line)):
+                past_insult = line[:140]
+                break
     if past_insult:
         hooks.append(f"PAST_INSULT:{past_insult}")
 
@@ -622,32 +647,32 @@ def extract_continuity_hooks(history: list[dict] | None, current_text: str = "")
     if past_softness:
         hooks.append(f"PAST_SOFTNESS:{past_softness}")
 
-    past_vulnerability = _pick([("scared", "tired", "hurt", "lonely", "cry", "anxious", "overwhelmed")])
+    past_vulnerability = _pick([("scared", "tired", "hurt", "lonely", "cry", "crying", "anxious", "overwhelmed")])
     if past_vulnerability:
         hooks.append(f"PAST_VULNERABILITY:{past_vulnerability}")
 
     if not hooks:
-        for line in reversed(user_lines[:-1] if len(user_lines) > 1 else user_lines):
-            if len(line) >= 40 and line.lower() != current_lower:
+        for line in _candidates():
+            if len(line) >= 40:
                 hooks.append(f"PAST_CONVERSATION:{line[:140]}")
                 break
     return hooks[:2]
 
 
 def describe_lore_hook(bot_name: str, text: str) -> str:
-    lowered = (text or "").lower()
+    lowered = normalize_text(text)
     matches: list[str] = []
-    if "ei" in lowered or "raiden" in lowered or "shogun" in lowered:
+    if _has(lowered, ["ei", "raiden", "shogun"]):
         matches.append("Ei should never feel emotionally neutral to you")
-    if "nahida" in lowered:
+    if _has(lowered, ["nahida"]):
         matches.append("Nahida should draw out something more complicated than simple trust")
-    if "fatui" in lowered or "harbinger" in lowered:
+    if _has(lowered, ["fatui", "harbinger"]):
         matches.append("the Fatui should sound personal, not like encyclopedia lore")
-    if "inazuma" in lowered:
+    if _has(lowered, ["inazuma"]):
         matches.append("Inazuma should carry grief, resentment, and memory")
-    if "traveler" in lowered or "traveller" in lowered:
+    if _has(lowered, ["traveler", "traveller"]):
         matches.append("the Traveler should feel like a specific person in your life")
-    if "sumeru" in lowered or "irminsul" in lowered:
+    if _has(lowered, ["sumeru", "irminsul"]):
         matches.append("Sumeru and Irminsul should sound like lived history")
     if not matches:
         return ""
@@ -660,27 +685,31 @@ def describe_lore_hook(bot_name: str, text: str) -> str:
 
 
 def describe_specific_lore_tree(bot_name: str, text: str) -> str:
-    lowered = (text or "").lower()
+    lowered = normalize_text(text)
     if bot_name == "scaramouche":
-        if any(token in lowered for token in ["ei", "raiden", "creator", "made you", "built you", "abandoned", "discarded"]):
+        if _has(lowered, ["ei", "raiden", "creator", "made you", "built you", "abandoned", "discarded"]):
             return "LORE_TREE: creator wound tree; answer with bitterness, pride, and the feeling of being made-then-discarded"
-        if any(token in lowered for token in ["fatui", "harbinger", "dottore", "gnosis"]):
+        if _has(lowered, ["fatui", "harbinger", "dottore", "gnosis"]):
             return "LORE_TREE: power and politics tree; answer with rank-conscious contempt, strategic respect, and personal grievance"
-        if any(token in lowered for token in ["betrayal", "used me", "lied", "abandoned me"]):
+        if _has(lowered, ["betrayal", "used me", "lied", "abandoned me"]):
             return "LORE_TREE: betrayal tree; answer like someone who files away weakness and never forgets leverage"
     else:
-        if any(token in lowered for token in ["nahida", "sumeru", "irminsul"]):
+        if _has(lowered, ["nahida", "sumeru", "irminsul"]):
             return "LORE_TREE: recovery tree; answer with reflective specificity about memory, second chances, and being seen"
-        if any(token in lowered for token in ["traveler", "traveller", "wander", "wind", "sky", "solitude"]):
+        if _has(lowered, ["traveler", "traveller", "wander", "wind", "sky", "solitude"]):
             return "LORE_TREE: wandering tree; answer with motion, quiet observation, and restrained attachment"
-        if any(token in lowered for token in ["kabukimono", "balladeer", "scaramouche", "old name", "forgive", "forgiveness"]):
+        if _has(lowered, ["kabukimono", "balladeer", "scaramouche", "old name", "forgive", "forgiveness"]):
             return "LORE_TREE: old-name tree; answer with discomfort gradients, regret, and resistance to being flattened into the past"
     return ""
 
 
-def describe_live_world_context(bot_name: str, now: float | None = None, text: str = "") -> str:
+def describe_live_world_context(bot_name: str, now: float | None = None, text: str = "", tz_name: str | None = None) -> str:
+    """Atmosphere hints. ``tz_name`` is the user's IANA timezone; without it the server's local time is used."""
     now = now or time.time()
-    dt = time.localtime(now)
+    try:
+        dt = datetime.fromtimestamp(now, ZoneInfo(tz_name)).timetuple() if tz_name else time.localtime(now)
+    except Exception:  # unknown timezone name
+        dt = time.localtime(now)
     parts: list[str] = []
     if dt.tm_hour in range(5, 9):
         parts.append("early morning stillness")
@@ -690,8 +719,8 @@ def describe_live_world_context(bot_name: str, now: float | None = None, text: s
         parts.append("winter cold")
     elif dt.tm_mon in (6, 7, 8):
         parts.append("summer heat")
-    lowered = (text or "").lower()
-    if any(token in lowered for token in ["rain", "storm", "thunder", "snow", "wind", "weather"]):
+    lowered = normalize_text(text)
+    if _has(lowered, ["rain", "storm", "thunder", "snow", "wind", "weather"]):
         parts.append("weather is explicitly in play")
     if not parts:
         return ""
@@ -704,19 +733,19 @@ def describe_live_world_context(bot_name: str, now: float | None = None, text: s
 
 
 def infer_scene_update(text: str, display_name: str = "") -> dict:
-    lowered = (text or "").lower()
+    lowered = normalize_text(text)
     update: dict[str, str] = {}
-    if any(token in lowered for token in ["inazuma", "sumeru", "forest", "desert", "city", "shrine", "harbor", "harbour", "room", "bed", "street", "storm", "rooftop"]):
+    if _has(lowered, ["inazuma", "sumeru", "forest", "desert", "city", "shrine", "harbor", "harbour", "room", "bed", "street", "storm", "rooftop"]):
         update["location"] = (text or "")[:120]
-    if any(token in lowered for token in ["fight", "battle", "argue", "comfort", "cry", "hide", "run", "wait", "watch", "travel", "wander"]):
+    if _has(lowered, ["fight", "battle", "argue", "comfort", "cry", "hide", "run", "wait", "watch", "travel", "wander"]):
         update["situation"] = (text or "")[:160]
-    if any(token in lowered for token in ["grab", "hold", "look", "stare", "step", "move", "touch", "leave", "stay", "follow", "protect"]):
+    if _has(lowered, ["grab", "hold", "look", "stare", "step", "move", "touch", "leave", "stay", "follow", "protect"]):
         update["last_beat"] = (text or "")[:160]
-    if any(token in lowered for token in ["angry", "tense", "calm", "soft", "jealous", "afraid", "care", "furious", "awkward"]):
+    if _has(lowered, ["angry", "tense", "calm", "soft", "jealous", "afraid", "care", "furious", "awkward"]):
         update["emotional_temp"] = (text or "")[:80]
-    if any(token in lowered for token in ["need to", "have to", "trying to", "going to", "must", "want to"]):
+    if _has(lowered, ["need to", "have to", "trying to", "going to", "must", "want to"]):
         update["objective"] = (text or "")[:140]
-    if any(token in lowered for token in ["hat", "sword", "blade", "vision", "gnosis", "letter", "book", "umbrella", "mask", "feather", "ring", "flower", "tea", "lantern"]):
+    if _has(lowered, ["hat", "sword", "blade", "vision", "gnosis", "letter", "book", "umbrella", "mask", "feather", "ring", "flower", "tea", "lantern"]):
         update["important_prop"] = (text or "")[:120]
     if display_name:
         update["present"] = display_name[:80]
@@ -748,29 +777,29 @@ def extract_memory_events(text: str) -> list[tuple[str, str, int]]:
     content = " ".join((text or "").strip().split())
     if len(content) < 12:
         return []
-    lowered = content.lower()
+    lowered = normalize_text(content)
     events: list[tuple[str, str, int]] = []
-    if any(token in lowered for token in ["i love you", "i'm in love", "i am in love", "i want you", "i need you", "i trust you"]):
+    if _has(lowered, ["i love you", "i'm in love", "i am in love", "i want you", "i need you", "i trust you"]):
         events.append(("confession", content[:220], 5))
-    if any(token in lowered for token in ["i love you", "i trust you", "i need you", "stay with me", "don't leave"]):
+    if _has(lowered, ["i love you", "i trust you", "i need you", "stay with me", "don't leave"]):
         events.append(("bond", content[:220], 4))
-    if any(token in lowered for token in ["sorry", "forgive", "didn't mean", "did not mean", "can we fix this"]):
+    if _has(lowered, ["sorry", "forgive", "didn't mean", "did not mean", "can we fix this"]):
         events.append(("repair", content[:220], 3))
-    if any(token in lowered for token in ["you lied", "betrayed", "abandoned", "left me", "used me"]):
+    if _has(lowered, ["you lied", "betrayed", "abandoned", "left me", "used me"]):
         events.append(("betrayal", content[:220], 5))
-    if any(token in lowered for token in ["hate you", "go away", "other bot", "prefer", "whatever", "shut up"]):
+    if detect_conflict_signal(lowered):
         events.append(("fight", content[:220], 4))
-    if any(token in lowered for token in ["humiliated", "embarrassed", "pathetic", "weak", "power", "control", "obedient"]):
+    if _has(lowered, ["humiliated", "embarrassed", "pathetic", "weak", "obedient"]):
         events.append(("slight", content[:220], 4))
-    if any(token in lowered for token in ["promise", "i swear", "i'll", "i will", "won't", "will not"]):
+    if _has(lowered, ["i promise", "promise you", "i swear", "i'll never", "i will never", "i won't leave", "i won't forget"]):
         events.append(("promise", content[:220], 3))
-    if any(token in lowered for token in ["remember this", "don't forget", "never forget", "important"]):
+    if _has(lowered, ["remember this", "don't forget", "never forget", "this is important", "it's important to me", "it is important to me"]):
         events.append(("unforgettable", content[:220], 5))
-    if any(token in lowered for token in ["joke", "funny", "lol", "lmao", "haha", "hehe"]):
+    if _has(lowered, ["joke", "funny", "lol", "lmao", "haha", "hehe"]):
         events.append(("inside_joke", content[:220], 2))
-    if any(token in lowered for token in ["scared", "hurt", "lonely", "tired", "cry", "anxious", "overwhelmed"]):
+    if _has(lowered, ["scared", "hurt", "lonely", "tired", "cry", "crying", "anxious", "overwhelmed"]):
         events.append(("vulnerability", content[:220], 4))
-    if any(token in lowered for token in ["comfort me", "stay with me", "hold me", "help me", "are you there"]):
+    if _has(lowered, ["comfort me", "stay with me", "hold me", "help me", "are you there"]):
         events.append(("comfort", content[:220], 4))
     return events[:4]
 

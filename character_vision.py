@@ -8,8 +8,12 @@ import requests
 from dotenv import load_dotenv
 
 
-root_env = os.path.join(os.path.dirname(__file__), "..", ".env")
-load_dotenv(dotenv_path=root_env) if os.path.exists(root_env) else load_dotenv()
+# Load this project's .env first, then a parent folder's (for a shared checkout with Wanderer). load_dotenv never
+# overrides a variable that is already set, so the project's own file wins.
+_here = os.path.dirname(os.path.abspath(__file__))
+for _env_file in (os.path.join(_here, ".env"), os.path.join(_here, "..", ".env")):
+    if os.path.exists(_env_file):
+        load_dotenv(dotenv_path=_env_file)
 
 XAI_API_KEY = (os.getenv("XAI_API_KEY") or "").strip()
 XAI_BASE_URL = (os.getenv("XAI_BASE_URL") or "https://api.x.ai/v1").rstrip("/")
@@ -55,6 +59,11 @@ def _image_part(
     return {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{data}"}}
 
 
+def vision_available() -> bool:
+    """True when an xAI key is configured (the bot falls back to Groq vision otherwise)."""
+    return bool(XAI_API_KEY)
+
+
 def ask_character_bot(
     bot_name: str,
     prompt: str,
@@ -68,7 +77,10 @@ def ask_character_bot(
     temperature: float = 0.3,
     timeout_s: int = 90,
 ) -> str:
-    """Run Scaramouche or Wanderer with optional vision input through xAI."""
+    """Run Scaramouche or Wanderer with optional vision input through xAI.
+
+    This call is *blocking* (``requests``): run it in an executor from async code.
+    """
     if not XAI_API_KEY:
         raise RuntimeError("Missing XAI_API_KEY")
 
@@ -105,7 +117,10 @@ def ask_character_bot(
     res.raise_for_status()
     body = res.json()
 
-    return body["choices"][0]["message"]["content"].strip()
+    try:
+        return (body["choices"][0]["message"]["content"] or "").strip()
+    except (KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError(f"Unexpected response from {XAI_BASE_URL}: {str(body)[:200]}") from exc
 
 
 if __name__ == "__main__":

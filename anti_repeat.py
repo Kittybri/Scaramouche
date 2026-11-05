@@ -4,6 +4,8 @@ from collections import Counter, deque
 from difflib import SequenceMatcher
 
 
+_COMPARE_CHARS = 600  # how much of each reply the similarity check looks at
+
 _RUNTIME_RECENT: dict[str, deque[str]] = {
     "scaramouche": deque(maxlen=80),
     "wanderer": deque(maxlen=80),
@@ -164,8 +166,15 @@ _FALLBACK_LINES: dict[str, list[str]] = {
 }
 
 
+_APOSTROPHES = str.maketrans({"\u2018": "'", "\u2019": "'", "\u201b": "'", "\u02bc": "'"})
+
+
+def _variants(bot_name: str):
+    return _OPENING_VARIANTS.get((bot_name or "").lower(), [])
+
+
 def _normalize(text: str) -> str:
-    text = (text or "").lower()
+    text = (text or "").translate(_APOSTROPHES).lower()
     text = re.sub(r"<@!?\d+>", "", text)
     text = re.sub(r"\[[^\]]+\]", " ", text)
     text = re.sub(r"\([^)]+\)", " ", text)
@@ -182,13 +191,24 @@ def _opening_key(text: str, words: int = 4) -> str:
 
 
 def _phrase_counts(bot_name: str, recent_messages: list[str]) -> Counter[str]:
+    """How often each signature opener ("tch", "how quaint", ...) starts a recent message."""
     counts: Counter[str] = Counter()
     for text in recent_messages:
-        normalized = _normalize(text)
-        for seed, pattern, _ in _OPENING_VARIANTS.get(bot_name, []):
-            if seed and normalized.startswith(seed):
+        sample = (text or "").translate(_APOSTROPHES).strip()
+        for seed, pattern, _ in _variants(bot_name):
+            if pattern.match(sample):
                 counts[seed] += 1
+                break
     return counts
+
+
+def _join_opening(replacement: str, rest: str) -> str:
+    """Attach the remainder of a reply to its new opener, capitalising it as a new sentence."""
+    if not rest:
+        return replacement
+    if replacement.endswith((".", "!", "?")):
+        rest = rest[:1].upper() + rest[1:]
+    return f"{replacement} {rest}".strip()
 
 
 def merge_recent_messages(*message_lists: list[str], limit: int = 40) -> list[str]:
@@ -258,41 +278,47 @@ def diversify_reply(bot_name: str, text: str, recent_messages: list[str]) -> str
     recent_openings = {_opening_key(item) for item in recent_messages if item}
     phrase_counts = _phrase_counts(bot_name, recent_messages)
 
-    for _, pattern, options in _OPENING_VARIANTS.get(bot_name, []):
-        match = pattern.match(updated)
+    for seed, pattern, options in _variants(bot_name):
+        match = pattern.match(updated.translate(_APOSTROPHES))
         if not match:
             continue
 
-        matched_text = _normalize(match.group(0))
-        is_stale = phrase_counts.get(matched_text, 0) >= 2 or _opening_key(updated) in recent_openings
+        is_stale = phrase_counts.get(seed, 0) >= 2 or _opening_key(updated) in recent_openings
         if not is_stale:
             return updated
 
         replacement = pick_fresh_option(bot_name, options, recent_messages)
         rest = updated[match.end():].lstrip(" ,.!?-")
-        return f"{replacement} {rest}".strip() if rest else replacement
+        return _join_opening(replacement, rest)
 
     return updated
 
 
 def detect_opening_phrase(bot_name: str, text: str) -> str:
-    sample = (text or "").strip()
-    for seed, pattern, _ in _OPENING_VARIANTS.get(bot_name, []):
+    sample = (text or "").translate(_APOSTROPHES).strip()
+    for seed, pattern, _ in _variants(bot_name):
         if pattern.match(sample):
             return seed
     return ""
 
 
-def replace_opening_phrase(bot_name: str, text: str, recent_messages: list[str] | None = None) -> str:
+def replace_opening_phrase(
+    bot_name: str,
+    text: str,
+    recent_messages: list[str] | None = None,
+    extra_options: list[str] | None = None,
+) -> str:
+    """Swap a signature opener for a fresh alternative. ``extra_options`` extends the built-in pool."""
     recent_messages = recent_messages or []
     updated = (text or "").strip()
-    for _, pattern, options in _OPENING_VARIANTS.get(bot_name, []):
-        match = pattern.match(updated)
+    for _, pattern, options in _variants(bot_name):
+        match = pattern.match(updated.translate(_APOSTROPHES))
         if not match:
             continue
-        replacement = pick_fresh_option(bot_name, options, recent_messages)
+        pool = list(dict.fromkeys([*options, *(extra_options or [])]))
+        replacement = pick_fresh_option(bot_name, pool, recent_messages)
         rest = updated[match.end():].lstrip(" ,.!?-")
-        return f"{replacement} {rest}".strip() if rest else replacement
+        return _join_opening(replacement, rest)
     return updated
 
 
@@ -302,18 +328,23 @@ def looks_repetitive(text: str, recent_messages: list[str]) -> bool:
         return False
 
     opening = _opening_key(text)
+    normalized = normalized[:_COMPARE_CHARS]  # repetition shows in how a reply starts; also bounds the cost below
     for recent in recent_messages[:18]:
-        recent_normalized = _normalize(recent)
+        recent_normalized = _normalize(recent)[:_COMPARE_CHARS]
         if not recent_normalized:
             continue
         if normalized == recent_normalized:
             return True
-        if opening and opening == _opening_key(recent):
+        ratio = SequenceMatcher(None, normalized, recent_normalized).ratio()
+        if ratio >= 0.91:
             return True
-        if SequenceMatcher(None, normalized, recent_normalized).ratio() >= 0.91:
+        # Same first words *and* mostly the same sentence. A shared opener alone ("I do not know ...")
+        # is normal speech, not a rut.
+        if opening and opening == _opening_key(recent) and ratio >= 0.65:
             return True
     return False
 
 
 def fallback_reply(bot_name: str, recent_messages: list[str]) -> str:
-    return pick_fresh_option(bot_name, _FALLBACK_LINES[bot_name.lower()], recent_messages)
+    lines = _FALLBACK_LINES.get((bot_name or "").lower()) or _FALLBACK_LINES["scaramouche"]
+    return pick_fresh_option(bot_name, lines, recent_messages)
