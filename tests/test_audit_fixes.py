@@ -227,7 +227,7 @@ async def test_memories_in_a_server_are_sent_privately(runtime, monkeypatch, mem
     "I'm suicidal", "thinking about self-harm", "I'm killing myself tonight", "I want to unalive myself", "i wanna kms",
     "I want to end my life", "I don't want to live anymore", "nobody would miss me if I was gone", "I took too many pills",
     "I want to die", "I'm going to kill myself", "I can't go on like this", "su1c1de", "k1ll myself", "s u i c i d e",
-    "i want to killmyself", "kill\u200bmyself", "ki\u200bll myself",
+    "i want to killmyself", "kill\u200bmyself", "ki\u200bll myself", "end\u200bmy life", "i want to\u200bdie",
 ])
 def test_crisis_phrasings_are_recognised(text):
     from awareness_features import classify_safety
