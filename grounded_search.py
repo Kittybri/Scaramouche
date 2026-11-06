@@ -12,19 +12,13 @@ from __future__ import annotations
 import html
 import logging
 import re
-import time
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, urlparse
 
 log = logging.getLogger("scaramouche.search")
 
 DDG_HTML_URL = "https://html.duckduckgo.com/html/"
-DDG_LITE_URL = "https://lite.duckduckgo.com/lite/"
-WIKIPEDIA_API_URL = "https://en.wikipedia.org/w/api.php"
 SEARCH_USER_AGENT = "Mozilla/5.0 (compatible; ScaraWandererBots/1.0; +https://github.com/Kittybri)"
 REQUEST_TIMEOUT_SECONDS = 9
-CACHE_TTL_SECONDS = 120
-_CACHE: dict[str, tuple[float, list[dict]]] = {}
-_CACHE_MAX = 64
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _ATTR_RE = re.compile(r"""([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)')""")
@@ -73,7 +67,7 @@ def looks_blocked(page: str) -> bool:
 
 
 def parse_ddg(page: str, max_results: int = 5) -> list[dict]:
-    """Parse DuckDuckGo's html.duckduckgo.com and lite.duckduckgo.com result pages.
+    """Parse DuckDuckGo's HTML result pages.
 
     A small scanner instead of one big regex: every step looks at a bounded stretch of text, so a hostile or
     broken page (thousands of unclosed tags) costs time proportional to its size, never quadratic.
@@ -121,34 +115,11 @@ def parse_ddg(page: str, max_results: int = 5) -> list[dict]:
     return results
 
 
-def parse_wikipedia(data: dict, max_results: int = 5) -> list[dict]:
-    """Parse the ``action=query&list=search`` response of the MediaWiki API."""
-    results: list[dict] = []
-    for item in ((data or {}).get("query") or {}).get("search") or []:
-        title = _text(item.get("title", ""))
-        if not title:
-            continue
-        results.append(
-            {
-                "title": f"{title} - Wikipedia"[:160],
-                "url": "https://en.wikipedia.org/wiki/" + quote(title.replace(" ", "_"), safe="_()',:!"),
-                "snippet": _text(item.get("snippet", ""))[:260],
-            }
-        )
-        if len(results) >= max_results:
-            break
-    return results
-
-
 async def search_web(query: str, max_results: int = 5) -> list[dict]:
     """Search the web for ``query``. Returns ``[{title, url, snippet}]`` (possibly empty); never raises."""
     text = re.sub(r"\s+", " ", (query or "")).strip()[:200]
     if not text:
         return []
-    key = text.lower()
-    cached = _CACHE.get(key)
-    if cached and time.monotonic() - cached[0] < CACHE_TTL_SECONDS:
-        return [dict(item) for item in cached[1]][:max_results]
 
     try:
         import aiohttp
@@ -158,51 +129,20 @@ async def search_web(query: str, max_results: int = 5) -> list[dict]:
 
     headers = {"User-Agent": SEARCH_USER_AGENT, "Accept-Language": "en-US,en;q=0.9"}
     timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT_SECONDS)
-    results: list[dict] = []
     try:
         async with aiohttp.ClientSession(headers=headers, timeout=timeout) as session:
-            attempts = (
-                ("GET", DDG_HTML_URL, {"params": {"q": text}}),
-                ("POST", DDG_LITE_URL, {"data": {"q": text}}),
-            )
-            for method, url, kwargs in attempts:
-                try:
-                    async with session.request(method, url, **kwargs) as resp:
-                        if resp.status != 200:
-                            log.warning("search: %s -> HTTP %s", url, resp.status)
-                            continue
-                        page = await resp.text()
-                except Exception as exc:  # noqa: BLE001 - network problems just move on to the next source
-                    log.warning("search: %s failed: %s: %s", url, type(exc).__name__, exc)
-                    continue
-                if looks_blocked(page):
-                    log.warning("search: %s served a bot-check page", url)
-                    continue
-                results = parse_ddg(page, max_results)
-                if results:
-                    break
-            if not results:
-                try:
-                    async with session.get(
-                        WIKIPEDIA_API_URL,
-                        params={
-                            "action": "query", "list": "search", "srsearch": text, "format": "json",
-                            "srlimit": str(max_results), "utf8": "1",
-                        },
-                    ) as resp:
-                        if resp.status == 200:
-                            results = parse_wikipedia(await resp.json(content_type=None), max_results)
-                except Exception as exc:  # noqa: BLE001
-                    log.warning("search: wikipedia fallback failed: %s: %s", type(exc).__name__, exc)
+            async with session.get(DDG_HTML_URL, params={"q": text}) as resp:
+                if resp.status != 200:
+                    log.warning("search: %s -> HTTP %s", DDG_HTML_URL, resp.status)
+                    return []
+                page = await resp.text()
     except Exception as exc:  # noqa: BLE001 - never let search break a conversation
-        log.warning("search: unexpected failure: %s: %s", type(exc).__name__, exc)
+        log.warning("search: %s failed: %s: %s", DDG_HTML_URL, type(exc).__name__, exc)
         return []
-
-    if results:
-        if len(_CACHE) >= _CACHE_MAX:
-            _CACHE.pop(next(iter(_CACHE)))
-        _CACHE[key] = (time.monotonic(), [dict(item) for item in results])
-    return results
+    if looks_blocked(page):
+        log.warning("search: %s served a bot-check page", DDG_HTML_URL)
+        return []
+    return parse_ddg(page, max_results)
 
 
 def format_search_context(results: list[dict]) -> str:

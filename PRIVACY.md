@@ -20,24 +20,24 @@ The bot uses this information to respond in character, remember conversations an
 
 - **Discord:** Carries messages, commands, and bot replies. Discord retains its own copies according to its policies.
 - **Groq:** Receives prompts, relevant conversation memory and channel context to generate replies. Selected video frames can be sent for video understanding, and images are sent too when no xAI key is configured.
-- **xAI:** When an xAI key is configured, receives an image and related prompt when the image-description feature is used.
+- **xAI:** When an xAI key is configured, receives an image and related prompt when the image-description feature is used. The bot looks at images and videos posted in any channel it can read (and in messages that reply to them), not only ones sent to it.
 - **Fish Audio or Google text-to-speech:** Receives reply text when voice output is generated. Google text-to-speech is a fallback when Fish Audio is unavailable.
-- **DuckDuckGo, Wikipedia and the US National Weather Service:** Receive a search query (Wikipedia only as a fallback source) or supplied weather location when those features are used. The weather lookup may first send the location to a National Weather Service location search.
+- **DuckDuckGo and the US National Weather Service:** Receive a search query or supplied weather location when those features are used. The weather lookup may first send the location to a National Weather Service location search.
 
 The bot operator's hosting provider processes stored data as part of running the bot. These services have their own retention and privacy practices. Only share content you are comfortable having processed for the features you use.
 
 ## Storage and retention
 
-The bot stores its memory and settings in SQLite databases on its configured host. Some interaction state is kept in a shared database for features involving Wanderer when the bots run together. By default the code does not expire conversation history or saved preferences; the operator can set `MESSAGE_RETENTION_DAYS` to delete conversation messages automatically after that many days. Otherwise they can remain until they are removed or the bot is retired. Operational logs are meant to contain event types, identifiers and error messages rather than conversation text. If the bots share a deployment, database backups made by Wanderer may contain older shared records. Media is downloaded for processing; the memory database generally stores descriptions and conversation text rather than the original image or video file. Discord and the services above may retain their own copies separately.
+The bot stores its memory and settings in SQLite databases on its configured host. Some interaction state is kept in a shared database for features involving Wanderer when the bots run together. The code does not expire conversation history or saved preferences; they can remain until they are removed or the bot is retired. Operational logs include the first characters of each message the bot receives (up to 80 for direct messages), with the sender's name. If the bots share a deployment, database backups made by Wanderer may contain older shared records. Media is downloaded for processing; the memory database generally stores descriptions and conversation text rather than the original image or video file. Discord and the services above may retain their own copies separately.
 
 ## Your choices and deletion
 
 - Use `!reset` (or `!wipe`) to clear your stored conversation messages, remembered topics, jokes and memories, reminders, trivia scores and relationship state. Your settings (such as DM and voice preferences) and basic account row are kept, and this command **does not remove records held in a shared Wanderer database, or copies held by Discord or outside services**. `!forget <topic>` removes just one topic.
-- Use `!proactive off` to stop unprompted pings and direct messages to you, `!dms off` to stop all optional direct messages, `!romance off` and `!nsfw off` to turn those modes off. Server admins can use `!proactivehere off` to stop the bot's unprompted posts in a channel.
+- Use `!proactive off` to stop unprompted pings and direct messages to you, `!dms off` to stop all optional direct messages, and `!nsfw off` to turn unfiltered mode off.
 - To request a fuller deletion, correction, or a copy of data associated with your Discord user ID, contact the bot owner in the Discord server where you use Scaramouche. Say which bot and user ID the request concerns. Do not put private details in a public GitHub issue. The owner must handle records outside the scope of `!reset` and any copies under their control.
 
 ## Age and changes
 
-Use the bot only if you meet Discord's minimum age requirement in your location. Unfiltered mode (`!nsfw`) is for adults: it takes effect only after you confirm that you are 18 or older, and only in direct messages and age-restricted channels. If you tell the bot you may harm yourself, it steps out of character, shares crisis resources, and does not save the text of that message. If you believe a younger person has used the bot, contact the owner to request deletion. This policy may change when the bot's features or providers change; the updated date above shows the latest revision.
+Use the bot only if you meet Discord's minimum age requirement in your location. Unfiltered mode (`!nsfw`) is for adults: it takes effect only after you confirm that you are 18 or older, and only in direct messages and age-restricted channels. If you believe a younger person has used the bot, contact the owner to request deletion. This policy may change when the bot's features or providers change; the updated date above shows the latest revision.
 
 Scaramouche is an unofficial fan project and is not affiliated with HoYoverse.

@@ -371,11 +371,11 @@ def neutralize_mass_mentions(text: str | None) -> str:
     return _MASS_MENTION_RE.sub("", text)
 
 
-def sanitize_mentions(text: str, valid_user_ids: Iterable[int] | None, *, max_mentions: int = 2) -> str:
+def sanitize_mentions(text: str, valid_user_ids: Iterable[int] | None, *, max_mentions: int | None = None) -> str:
     """Make a model-written reply safe to send.
 
     * ``@everyone`` / ``@here`` are neutralised, role and unknown-user mentions are removed;
-    * only real members (``valid_user_ids``) stay mentioned, at most ``max_mentions`` of them.
+    * only real members (``valid_user_ids``) stay mentioned (at most ``max_mentions`` of them, if given).
 
     Every pass is a single linear scan and replaces a removed mention by a space, so no input can rebuild a
     mention out of the pieces that are left (``<@<@7>7>``).
@@ -389,7 +389,7 @@ def sanitize_mentions(text: str, valid_user_ids: Iterable[int] | None, *, max_me
     def _user(match: re.Match[str]) -> str:
         nonlocal kept
         uid = int(re.search(r"\d+", match.group(0)).group())  # type: ignore[union-attr]
-        if uid in valid and kept < max_mentions:
+        if uid in valid and (max_mentions is None or kept < max_mentions):
             kept += 1
             return f"<@{uid}>"
         return " "

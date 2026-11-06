@@ -5,9 +5,11 @@ from pathlib import Path
 from typing import Optional
 
 import requests
-from envfile import load_project_env
+from dotenv import load_dotenv
 
-load_project_env()  # only this project's .env (a parent folder's only with LOAD_PARENT_ENV=1)
+
+root_env = os.path.join(os.path.dirname(__file__), "..", ".env")
+load_dotenv(dotenv_path=root_env) if os.path.exists(root_env) else load_dotenv()
 
 XAI_API_KEY = (os.getenv("XAI_API_KEY") or "").strip()
 XAI_BASE_URL = (os.getenv("XAI_BASE_URL") or "https://api.x.ai/v1").rstrip("/")

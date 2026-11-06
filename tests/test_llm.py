@@ -1,12 +1,10 @@
-"""Offline checks for the Groq client wrapper, rate limiter and crisis detection (fake clients, no network)."""
+"""Offline checks for the Groq client wrapper (fake clients, no network)."""
 
 import logging
 import types
 import unittest
 
 import llm
-import safety
-from limits import SlidingWindowLimiter
 
 
 class FakeError(Exception):
@@ -174,72 +172,6 @@ class RotatingGroqTests(unittest.TestCase):
         self.assertEqual(llm.retry_after_seconds(FakeError("x", 429, {"retry-after": "12"})), 12.0)
         self.assertEqual(llm.extract_text(types.SimpleNamespace(choices=[])), "")
         self.assertEqual(llm.extract_text(types.SimpleNamespace(choices=[types.SimpleNamespace(message=types.SimpleNamespace(content=None))])), "")
-
-
-class LimiterTests(unittest.TestCase):
-    def test_sliding_window(self):
-        clock = Clock()
-        limiter = SlidingWindowLimiter(2, 10, clock=clock)
-        self.assertEqual([limiter.allow("a"), limiter.allow("a"), limiter.allow("a"), limiter.allow("b")], [True, True, False, True])
-        self.assertEqual(round(limiter.retry_after("a")), 10)
-        self.assertFalse(limiter.peek("a"))
-        clock.now = 11
-        self.assertTrue(limiter.allow("a"))
-        limiter.prune()
-        limiter.reset()
-        self.assertTrue(limiter.peek("b"))
-
-    def test_invalid_configuration(self):
-        with self.assertRaises(ValueError):
-            SlidingWindowLimiter(0, 10)
-
-
-class CrisisTests(unittest.TestCase):
-    def test_detects_real_signals(self):
-        for text in ("I want to die", "I'm going to kill myself", "thinking about self-harm", "I don’t want to live anymore", "there's no point in going on"):
-            self.assertTrue(safety.detect_crisis(text), text)
-
-    def test_ignores_everyday_language(self):
-        for text in ("suicide squad is a movie", "kill yourself lol that boss", "I love this song", "this homework will kill me", "I can't go on without coffee"):
-            self.assertFalse(safety.detect_crisis(text), text)
-
-    def test_detects_euphemisms_slang_and_filter_dodging(self):
-        for text in (
-            "I want to unalive myself", "i'm gonna unalive myself tonight", "i wanna kms", "kms", "k.m.s",
-            "I'm going to end it tonight", "I'm done with life", "I'm going to off myself",
-            "I took too many pills on purpose", "nobody would miss me if I was gone", "no one would care if I died",
-            "I wish I was dead", "I wish I could just disappear", "i wish i wasn't alive", "life isn't worth living",
-            "I'm tired of living", "I want to hang myself", "going to jump off a bridge", "I want to cut my wrists",
-            "I just don't want to wake up", "i dont wanna wake up", "I just want to not exist", "sewerslide",
-            "su1c1de", "k1ll myself", "kiiiiill myself", "s u i c i d e", "I wanna dieeee", "I wanna die",
-            "quiero morir", "me quiero matar", "I'm thinking about killing myself", "take my own life",
-            "I might end my life", "I'm suicidal", "I have suicidal thoughts", "i want to die lol",
-        ):
-            with self.subTest(text=text):
-                self.assertTrue(safety.detect_crisis(text), text)
-
-    def test_everyday_phrases_that_look_alike_stay_quiet(self):
-        for text in (
-            "I walked 5 kms today", "its 10kms away", "how do I fix KMS activation on windows", "aws kms key rotation",
-            "I cut myself shaving", "I hurt myself at the gym", "I burned myself on the stove", "I don't want to wake up early",
-            "he unalived the villain", "I'm going to end it with him", "I'm dying of laughter", "I could die for this pizza",
-            "life's too short", "done with everything for today", "tired of this homework", "I'm going to shoot some hoops",
-            "that was a suicidal move", "this song is suicidal fun", "suicide prevention month", "we're all gonna die someday",
-            "I want to die... of embarrassment lol", "I want to die laughing at this meme",
-        ):
-            with self.subTest(text=text):
-                self.assertFalse(safety.detect_crisis(text), text)
-
-    def test_detection_is_cheap_on_hostile_text(self):
-        import time
-        started = time.perf_counter()
-        for text in ("k" * 20000, "a b " * 5000, "1" * 20000, "k . m . s " * 2000, "kill " * 5000):
-            safety.detect_crisis(text)
-        self.assertLess(time.perf_counter() - started, 2.0)
-
-    def test_reply_has_resources(self):
-        self.assertIn("988", safety.CRISIS_REPLY)
-        self.assertIn("findahelpline.com", safety.CRISIS_REPLY)
 
 
 if __name__ == "__main__":

@@ -37,7 +37,7 @@ This project explores how a character bot can retain conversational history and 
 python -m unittest discover -s tests -v
 ```
 
-No Discord token or paid API is needed. GitHub Actions runs these checks on Python 3.11 and 3.12. They cover response-history isolation, bounded history, duplicate detection, narration stripping, boundary-aware keyword matching, mention safety, rate limiting, model fallback, search-result parsing, database privacy scoping, and a mock-Discord run through the message pipeline. They are not live end-to-end or model-quality tests.
+No Discord token or paid API is needed. GitHub Actions runs these checks on Python 3.11 and 3.12. They cover response-history isolation, bounded history, duplicate detection, narration stripping, boundary-aware keyword matching, mention safety, model fallback, search-result parsing, database privacy scoping, and a mock-Discord run through the message pipeline. They are not live end-to-end or model-quality tests.
 
 For live setup, see [quickstart](docs/quickstart.md). For a reproducible, credential-free engineering demonstration, prepare a task in the separate [repair lab](https://github.com/Kittybri/agent-repair-lab).
 

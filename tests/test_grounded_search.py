@@ -66,13 +66,6 @@ class ParserTests(unittest.TestCase):
         self.assertTrue(search.looks_blocked('<div class="anomaly-modal__modal">Unfortunately, bots use DuckDuckGo too.</div>'))
         self.assertFalse(search.looks_blocked(HTML_RESULTS))
 
-    def test_wikipedia_fallback(self):
-        data = {"query": {"search": [{"title": "Scaramouche (character)", "snippet": '<span class="searchmatch">Scaramouche</span> is a stock character'}]}}
-        self.assertEqual(search.parse_wikipedia(data), [{
-            "title": "Scaramouche (character) - Wikipedia",
-            "url": "https://en.wikipedia.org/wiki/Scaramouche_(character)",
-            "snippet": "Scaramouche is a stock character"}])
-
     def test_hostile_pages_cannot_stall_the_parser(self):
         import time
 
@@ -103,69 +96,41 @@ HAVE_AIOHTTP = importlib.util.find_spec("aiohttp") is not None
 
 
 @unittest.skipUnless(HAVE_AIOHTTP, "aiohttp is not installed")
-class SearchChainTests(unittest.IsolatedAsyncioTestCase):
-    """search_web against a local server standing in for DuckDuckGo and Wikipedia."""
+class SearchTests(unittest.IsolatedAsyncioTestCase):
+    """search_web against a local server standing in for DuckDuckGo."""
 
     async def asyncSetUp(self):
         from aiohttp import web
         from aiohttp.test_utils import TestServer
 
         self.hits = []
-        self.mode = {"html": HTML_RESULTS, "lite": LITE_RESULTS, "wiki": {"query": {"search": [{"title": "Fatui", "snippet": "The <b>Fatui</b>"}]}}}
+        self.mode = {"html": HTML_RESULTS}
 
         async def html(request):
             self.hits.append("html")
             body = self.mode["html"]
             return web.Response(text=body) if body is not None else web.Response(status=503)
 
-        async def lite(request):
-            self.hits.append("lite")
-            body = self.mode["lite"]
-            return web.Response(text=body) if body is not None else web.Response(status=503)
-
-        async def wiki(request):
-            self.hits.append("wiki")
-            return web.json_response(self.mode["wiki"])
-
         app = web.Application()
         app.router.add_get("/html/", html)
-        app.router.add_post("/lite/", lite)
-        app.router.add_get("/w/api.php", wiki)
         self.server = TestServer(app)
         await self.server.start_server()
         self.addAsyncCleanup(self.server.close)
-        base = f"http://{self.server.host}:{self.server.port}"
-        for name, value in (("DDG_HTML_URL", f"{base}/html/"), ("DDG_LITE_URL", f"{base}/lite/"), ("WIKIPEDIA_API_URL", f"{base}/w/api.php")):
-            original = getattr(search, name)
-            setattr(search, name, value)
-            self.addCleanup(setattr, search, name, original)
-        search._CACHE.clear()
-        self.addCleanup(search._CACHE.clear)
+        original = search.DDG_HTML_URL
+        search.DDG_HTML_URL = f"http://{self.server.host}:{self.server.port}/html/"
+        self.addCleanup(setattr, search, "DDG_HTML_URL", original)
 
-    async def test_first_source_wins_and_results_are_cached(self):
+    async def test_results_are_unwrapped(self):
         results = await search.search_web("scaramouche genshin", 3)
         self.assertEqual(self.hits, ["html"])
         self.assertEqual(results[0]["url"], "https://genshin.fandom.com/wiki/Scaramouche_(disambiguation)")
-        await search.search_web("Scaramouche Genshin", 3)
-        self.assertEqual(self.hits, ["html"])  # served from the short-lived cache
 
-    async def test_bot_check_page_falls_back_to_lite(self):
+    async def test_a_bot_check_page_gives_no_results(self):
         self.mode["html"] = '<div class="anomaly-modal">Unfortunately, bots use DuckDuckGo too.</div>'
-        results = await search.search_web("example domain")
-        self.assertEqual(self.hits, ["html", "lite"])
-        self.assertEqual(results[0]["title"], "Example Domain")
+        self.assertEqual(await search.search_web("example domain"), [])
 
-    async def test_wikipedia_is_the_last_resort(self):
+    async def test_failure_returns_nothing_instead_of_raising(self):
         self.mode["html"] = None
-        self.mode["lite"] = None
-        results = await search.search_web("fatui")
-        self.assertEqual(self.hits, ["html", "lite", "wiki"])
-        self.assertEqual(results[0]["url"], "https://en.wikipedia.org/wiki/Fatui")
-
-    async def test_total_failure_returns_nothing_instead_of_raising(self):
-        self.mode["html"] = None
-        self.mode["lite"] = None
-        self.mode["wiki"] = {}
         self.assertEqual(await search.search_web("nothing at all"), [])
         self.assertEqual(await search.search_web("   "), [])
 

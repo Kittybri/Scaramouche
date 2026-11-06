@@ -142,7 +142,7 @@ class MentionTests(unittest.TestCase):
         self.assertNotIn("@everyone", out)
         self.assertNotIn("<@999>", out)
         self.assertNotIn("<@&55>", out)
-        self.assertEqual(out.count("<@"), 2)  # at most two real mentions survive
+        self.assertEqual(out.count("<@"), 3)  # every real member stays mentioned; there is no cap
         self.assertEqual(sanitize_mentions("hi <@2>", set(), max_mentions=0), "hi")
 
     def test_mass_mentions_have_no_word_boundary_gap(self):

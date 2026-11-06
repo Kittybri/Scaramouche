@@ -226,12 +226,9 @@ class MemoryTests(unittest.IsolatedAsyncioTestCase):
         user = await self.mem.get_user(1)
         self.assertEqual((user["mood"], user["affection"], user["trust"], user["drift_score"]), (10, 100, 0, 7))
 
-    async def test_channel_switch_and_greeting_day(self):
+    async def test_active_channels_and_greeting_day(self):
         await self.mem.track_channel(300, 9)
         self.assertIn(300, [c[0] for c in await self.mem.get_active_channels()])
-        await self.mem.set_channel_proactive(300, False)
-        self.assertNotIn(300, [c[0] for c in await self.mem.get_active_channels()])
-        self.assertFalse(await self.mem.channel_proactive_allowed(300))
         await self.mem.upsert_user(3, "c", "C")
         self.assertTrue(await self.mem.should_greet(3, 20261105))
         await self.mem.mark_greeted(3, 20261105)
@@ -262,12 +259,12 @@ class MemoryTests(unittest.IsolatedAsyncioTestCase):
         self.mem.unmute_user(1)
         self.assertFalse(self.mem.is_muted(1))
 
-    async def test_pruning_only_deletes_messages_when_asked(self):
+    async def test_pruning_never_deletes_conversation_history(self):
         await self.mem.add_message(1, 1, "user", "old")
         with sql(self.mem.db_path) as db:
             db.execute("UPDATE messages SET ts=ts-100*86400")
-        self.assertEqual((await self.mem.prune_old_data(0))["messages"], 0)
-        self.assertEqual((await self.mem.prune_old_data(30))["messages"], 1)
+        await self.mem.prune_old_data()
+        self.assertEqual(len(await self.mem.get_history(1, 1)), 1)
 
 
 if __name__ == "__main__":

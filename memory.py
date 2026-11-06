@@ -263,11 +263,6 @@ class Memory:
                     demand   TEXT,
                     ts       REAL DEFAULT 0
                 );
-                CREATE TABLE IF NOT EXISTS channel_settings (
-                    channel_id        INTEGER PRIMARY KEY,
-                    proactive_enabled INTEGER DEFAULT 1,
-                    updated_ts        REAL DEFAULT 0
-                );
             """)
             async with db.execute("PRAGMA table_info(users)") as cur:
                 had_private_summary = any(row[1] == "memory_summary_dm" for row in await cur.fetchall())
@@ -1715,14 +1710,11 @@ class Memory:
             await db.commit()
 
     # ── Maintenance ──────────────────────────────────────────────────────────
-    async def prune_old_data(self, message_retention_days: int = 0) -> dict:
-        """Housekeeping. Messages are only deleted when ``message_retention_days`` > 0 (default: keep forever)."""
+    async def prune_old_data(self) -> dict:
+        """Housekeeping of expired bookkeeping rows. Conversation history is never deleted here."""
         now = time.time()
-        result = {"messages": 0, "phrase_cooldowns": 0, "reminders": 0, "trivia": 0}
+        result = {"phrase_cooldowns": 0, "reminders": 0, "trivia": 0}
         async with self._connect() as db:
-            if message_retention_days and message_retention_days > 0:
-                cur = await db.execute("DELETE FROM messages WHERE ts<?", (now - message_retention_days * 86400,))
-                result["messages"] = max(0, cur.rowcount or 0)
             cur = await db.execute("DELETE FROM phrase_cooldowns WHERE last_used<?", (now - 60 * 86400,))
             result["phrase_cooldowns"] = max(0, cur.rowcount or 0)
             cur = await db.execute("DELETE FROM reminders WHERE done=1 AND due_ts<?", (now - 30 * 86400,))
@@ -1835,26 +1827,10 @@ class Memory:
         cutoff = time.time()-86400*3
         async with self._connect() as db:
             async with db.execute(
-                "SELECT channel_id,guild_id FROM channels WHERE last_active>? AND channel_id NOT IN "
-                "(SELECT channel_id FROM channel_settings WHERE proactive_enabled=0)",
+                "SELECT channel_id,guild_id FROM channels WHERE last_active>?",
                 (cutoff,),
             ) as cur:
                 return await cur.fetchall()
-
-    async def set_channel_proactive(self, channel_id: int, enabled: bool):
-        async with self._connect() as db:
-            await db.execute(
-                "INSERT INTO channel_settings (channel_id,proactive_enabled,updated_ts) VALUES (?,?,?) "
-                "ON CONFLICT(channel_id) DO UPDATE SET proactive_enabled=excluded.proactive_enabled, updated_ts=excluded.updated_ts",
-                (channel_id, 1 if enabled else 0, time.time()),
-            )
-            await db.commit()
-
-    async def channel_proactive_allowed(self, channel_id: int) -> bool:
-        async with self._connect() as db:
-            async with db.execute("SELECT proactive_enabled FROM channel_settings WHERE channel_id=?", (channel_id,)) as cur:
-                row = await cur.fetchone()
-        return bool(row[0]) if row else True
 
     # ── Cooldowns ─────────────────────────────────────────────────────────────
     async def can_proactive(self, channel_id: int, cooldown: int = 3600) -> bool:
