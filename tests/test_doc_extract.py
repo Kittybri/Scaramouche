@@ -18,12 +18,32 @@ import doc_extract  # noqa: E402
 HAVE_DOCX = importlib.util.find_spec("docx") is not None
 HAVE_PPTX = importlib.util.find_spec("pptx") is not None
 
-PDF = (
-    b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n"
-    b"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 200]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj\n"
-    b"4 0 obj<</Length 44>>stream\nBT /F1 18 Tf 20 100 Td (Hello Teyvat) Tj ET\nendstream endobj\n"
-    b"5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\ntrailer<</Root 1 0 R/Size 6>>\n%%EOF"
-)
+def pdf_document(*objects: bytes) -> bytes:
+    """A small but well-formed PDF: objects 1..n plus the cross-reference table and trailer every reader expects.
+    PyPDF2, the PDF reader on the Oracle VM, refuses a file without "startxref" (pdfplumber guesses its way through)."""
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for number, body in enumerate(objects, 1):
+        offsets.append(len(out))
+        out += b"%d 0 obj" % number + body + b"endobj\n"
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    out += b"".join(b"%010d 00000 n \n" % offset for offset in offsets)
+    out += b"trailer<</Root 1 0 R/Size %d>>\nstartxref\n%d\n%%%%EOF" % (len(objects) + 1, xref)
+    return bytes(out)
+
+
+_CATALOG = b"<</Type/Catalog/Pages 2 0 R>>"
+_PAGES = b"<</Type/Pages/Kids[3 0 R]/Count 1>>"
+_PAGE = b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 200]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>"
+_FONT = b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>"
+
+
+def _stream(data: bytes, extra: bytes = b"") -> bytes:
+    return b"<</Length %d%s>>stream\n" % (len(data), extra) + data + b"\nendstream"
+
+
+PDF = pdf_document(_CATALOG, _PAGES, _PAGE, _stream(b"BT /F1 18 Tf 20 100 Td (Hello Teyvat) Tj ET"), _FONT)
 
 
 def make_docx(paragraphs=("Photosynthesis converts light to sugar.",)):
@@ -68,14 +88,8 @@ def zip_with_part(name: str, size: int, base: bytes) -> bytes:
 def pdf_flate_bomb(inflated_mb: int) -> bytes:
     compressor = zlib.compressobj(9)
     chunks = [compressor.compress(b" " * (1024 * 1024)) for _ in range(inflated_mb)] + [compressor.flush()]
-    stream = b"".join(chunks)
-    objects = [
-        b"1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n",
-        b"2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n",
-        b"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 200]/Contents 4 0 R>>endobj\n",
-        b"4 0 obj<</Length %d/Filter/FlateDecode>>stream\n" % len(stream) + stream + b"\nendstream endobj\n",
-    ]
-    return b"%PDF-1.4\n" + b"".join(objects) + b"trailer<</Root 1 0 R/Size 5>>\n%%EOF"
+    # the page has a font, so every PDF library really inflates the stream instead of skipping the page
+    return pdf_document(_CATALOG, _PAGES, _PAGE, _stream(b"".join(chunks), b"/Filter/FlateDecode"), _FONT)
 
 
 @unittest.skipUnless(HAVE_DOCX, "python-docx not installed")

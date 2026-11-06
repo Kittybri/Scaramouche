@@ -38,7 +38,8 @@ MAX_ARCHIVE_UNCOMPRESSED = 64 * MiB   # sum of the declared sizes of every part
 MAX_XML_PART = 12 * MiB               # one XML part (document.xml, a slide ...); lxml needs ~10x that in memory
 MAX_REPLY_BYTES = 1 * MiB             # what the parent is willing to read back from the child
 
-DEFAULT_MEMORY_MB = 1024
+DEFAULT_MEMORY_MB = 512   # per document; the Oracle VM has ~1 GB of RAM in total. Ordinary files need far less
+                          # (a 60,000-character Word file reads under 256), so only a hostile file reaches it
 DEFAULT_CPU_SECONDS = 30
 DEFAULT_TIMEOUT_SECONDS = 40.0
 

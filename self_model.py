@@ -597,11 +597,14 @@ class SelfModelStore:
             contradiction_status = None
             if kind == "contradict":
                 contradiction_summary = f"Behavior conflicts with belief: {belief}"
+                # The conflict target is spelled out because SQLite before 3.35 (the Oracle VM runs 3.34.1) rejects
+                # "ON CONFLICT DO UPDATE" without one. It is idx_self_contradictions_unique, which also merges rows
+                # whose related_user_id is NULL; whenever the table's own UNIQUE fails this index fails too.
                 await db.execute(
                     """INSERT INTO self_contradictions
                        (belief_id,related_user_id,summary,pressure,status,first_seen_ts,last_seen_ts,last_decay_ts)
                        VALUES(?,?,?,?, 'open',?,?,?)
-                       ON CONFLICT DO UPDATE SET
+                       ON CONFLICT(belief_id,COALESCE(related_user_id,-1),summary) DO UPDATE SET
                          pressure=MIN(20,pressure+excluded.pressure),last_seen_ts=excluded.last_seen_ts,
                          last_decay_ts=excluded.last_decay_ts,status='open'""",
                     (belief_id, user_id, contradiction_summary[:500], weight, now, now, now),
