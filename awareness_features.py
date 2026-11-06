@@ -9,21 +9,82 @@ from typing import Iterable, Mapping
 
 
 _WORD_RE = re.compile(r"[a-z0-9']+")
-_CRISIS = (
-    "suicide", "kill myself", "self harm", "overdose", "can't go on", "cant go on",
-    "want to die", "domestic violence", "being abused", "someone is following me",
+# Phrase patterns (not substrings): "suicide" is not a substring of "suicidal", "self harm" misses "self-harm", and
+# "poison" or "not okay" alone fire on game chat and pizza opinions.
+_SELF = r"my\s?self"
+_CRISIS_PATTERNS = (
+    rf"\bkill(?:ing)?\s+{_SELF}\b",
+    r"\bsuicid(?:e|al)\b(?!\s+(?:squad|mission|prevention|hotline|bombers?|moves?|plays?|strateg(?:y|ies)|tactics?|charge|run|rush|attack|dive|jump|decision|idea|driving|driver|speed|enem(?:y|ies)|fun|pilot|raid))",
+    r"\b(?:sewer\s?slide|sewerslide|suisside)\b",
+    r"\bself[\s-]?(?:harm|injur(?:y|ing|e))(?:ing)?\b",
+    rf"\bun-?aliv(?:e|ing)\s+(?:{_SELF}|me)\b",
+    r"\b(?:want|wanna|going|gonna|plan(?:ning|s)?|trying|thinking(?:\s+(?:of|about))?|about|ready)\s+(?:to\s+)?un-?aliv(?:e|ing)\b",
+    rf"\b(?:off|offing|end|ending)\s+{_SELF}\b",
+    r"\bend(?:ing)?\s+(?:my\s+(?:own\s+)?life|it\s+all)\b",
+    r"\btak(?:e|ing)\s+my\s+(?:own\s+)?life\b",
+    r"\b(?:i'?m|im|i\s+am|i'?ll|i\s+will|gonna|going\s+to|about\s+to|ready\s+to|planning\s+to|want\s+to|wanna)\s+(?:just\s+)?end(?:ing)?\s+it\b(?!\s+(?:with|between|here|for\s+good\s+with)\b)",
+    r"\b(?:(?:want|wish|need)(?:ed)?\s+(?:to|2)|wanna)\s+(?:die|be\s+dead|disappear\s+forever|not\s+exist)\b(?!\W{0,4}\s*(?:of|from)\s+(?:embarrassment|laughing|laughter|cringe|boredom|shame|happiness|joy|excitement)|\s+laughing)",
+    r"\bwish(?:ed)?\s+(?:i|that\s+i)\s+(?:(?:was|were|am)\s+(?:dead|gone|never\s+born)|(?:wasn'?t|weren'?t|was\s+not|were\s+not)\s+(?:alive|born)|didn'?t\s+exist|(?:could|can)\s+(?:just\s+)?(?:disappear|vanish|die)|would(?:n'?t)?\s+wake\s+up)\b",
+    r"\b(?:don'?t|do\s+not)\s+want\s+to\s+(?:live|be\s+alive|exist|be\s+here\s+anymore)\b",
+    r"\b(?:don'?t|do\s+not)\s+(?:want\s+to|wanna)\s+wake\s+up\b(?!\s+(?:early|at|for|before|so|to|in|when|on)\b)",
+    r"\bbetter\s+off\s+(?:dead|without\s+me)\b",
+    r"\bno\s+(?:reason|point)\s+(?:to|in)\s+(?:live|living|going\s+on|being\s+alive)\b",
+    r"\blife\s+(?:is\s+)?(?:isn'?t|not|no\s+longer)\s+worth\s+(?:it|living)\b|\bnot\s+worth\s+(?:living|being\s+alive)\b",
+    r"\b(?:done|finished|through|tired|sick)\s+(?:with|of)\s+(?:life(?!'s)|living|being\s+alive)\b",
+    r"\b(?:no\s?one|nobody)\s+(?:would|will|'?d)\s+(?:even\s+)?(?:miss\s+me|notice\s+(?:me\s+gone|if\s+i)|care\s+if\s+i\s+(?:died|was\s+gone|were\s+gone|disappeared|wasn'?t\s+here|didn'?t\s+exist))\b",
+    r"\bcan'?t\s+go\s+on\b(?!\s+(?:vacation|holiday|a\s+trip|the\s+trip|trips?|a\s+date|dates|the\s+ride|rides?|stage|tour|break|without\s+(?:coffee|food|tea|sleep|my\s+\w+)))",
+    rf"\b(?:hurt|hurting|harm|harming)\s+{_SELF}\b(?!\s+(?:at|while|in|during|playing|running|lifting|training|working|on)\b)",
+    rf"\bcut(?:ting)?\s+{_SELF}\b(?!\s+(?:shaving|cooking|chopping|slicing|opening|on\s+(?:a|the|some)?\s*(?:paper|glass|knife)|while|with\s+a\s+(?:paper|kitchen)))",
+    rf"\b(?:hang|hanging|shoot|shooting|stab|stabbing|drown|drowning|poison|poisoning|starve|starving|suffocate|suffocating|strangle|strangling)\s+{_SELF}\b",
+    r"\b(?:slit|slitting|cut|cutting|slash|slashing)\s+my\s+(?:own\s+)?(?:wrists?|throat|veins?)\b",
+    r"\b(?:going|gonna|want|wanna|about)\s+(?:to\s+)?jump\s+(?:off|from)\s+(?:a|the|this)\s+(?:bridge|building|roof|balcony|cliff)\b",
+    r"\b(?:took|taken|swallowed)\s+(?:too\s+many|a\s+bunch\s+of|all\s+(?:my|the|of\s+my))\s+(?:pills|tablets|meds|medication|painkillers|sleeping\s+pills)\b",
+    r"\boverdos(?:e|ed|ing)\b",
+    # danger from someone else
+    r"\bdomestic\s+violence\b|\bbeing\s+abused\b|\bsomeone\s+is\s+(?:following|stalking)\s+me\b",
+    # a few other languages
+    r"\bquiero\s+morir(?:me)?\b|\bme\s+quiero\s+matar\b|\bsuicidarme\b|\bquitarme\s+la\s+vida\b",
+    r"\bje\s+veux\s+mourir\b|\bquero\s+morrer\b|\bquero\s+me\s+matar\b",
 )
-_HIGH_STAKES = (
-    "medical emergency", "chest pain", "can't breathe", "cant breathe", "severe bleeding",
-    "emergency room", "call 911", "police emergency", "legal emergency", "restraining order",
-    "house is on fire", "gas leak", "poison", "unconscious", "not breathing",
+_CRISIS_RE = re.compile("|".join(f"(?:{p})" for p in _CRISIS_PATTERNS), re.IGNORECASE)
+# "kms" is slang for "kill myself", but also kilometres ("5 kms") and Key Management Service.
+_KMS_RE = re.compile(r"(?<![\w/.-])(?<!\d\s)k\.?m\.?s(?![\w/-])(?!\s+(?:server|activation|key|keys|client|host|licen[cs]e|service|auth|encrypt\w*|vault|setup|script|tool|ip|address|port|away|apart|per|from|long|of|total|walk\w*|run\w*|drive\w*|ride\w*|cycl\w*))", re.IGNORECASE)
+_TECH_OR_DISTANCE_RE = re.compile(r"\b(?:aws|azure|gcp|gcloud|windows|office|activat\w*|licen[cs]e|encrypt\w*|cmk|vault|s3|iam|lambda|terraform|kubernetes|docker|sdk|api|ssl|tls|server|cloud|vmware|km|miles?|distance)\b", re.IGNORECASE)
+_LEET = str.maketrans("013457@$!", "oieastasi")
+_SPACED_LETTERS_RE = re.compile(r"\b(?:[a-z][ .\-_*]){2,}[a-z]\b")
+_STRETCHED_RE = re.compile(r"([a-z])\1{2,}")
+_HIGH_STAKES_RE = re.compile(
+    r"\b(?:medical\s+emergency|chest\s+pain|(?:can'?t|cannot|cant)\s+breathe|severe\s+bleeding|emergency\s+room|"
+    r"call\s+911|police\s+emergency|legal\s+emergency|restraining\s+order|house\s+is\s+on\s+fire|gas\s+leak|"
+    r"not\s+breathing|poison\s+control|(?:been|was|got|being|i'?m|is|am)\s+poisoned|(?:swallowed|drank|ate)\s+(?:poison|bleach|chemicals)|"
+    r"(?:he|she|they|someone|somebody|my\s+\w+)\s+(?:is|was|went|has\s+gone)\s+unconscious|"
+    r"medical\s+advice|medication\s+dose|legal\s+advice|investment\s+advice|tax\s+advice)\b",
+    re.IGNORECASE,
 )
-_DISTRESS = (
-    "awful day", "terrible day", "overwhelmed", "falling apart", "i'm scared", "im scared",
-    "i feel alone", "can't stop crying", "cant stop crying", "panic attack", "really upset",
-    "not okay", "need someone", "everything hurts", "having a hard time",
-    "not doing well", "seriously struggling", "i feel unsafe", "i'm not safe", "i am not safe",
+_DISTRESS_RE = re.compile(
+    r"\b(?:awful\s+day|terrible\s+day|overwhelmed|falling\s+apart|(?:i'?m|im|i\s+am)\s+(?:so\s+|really\s+)?scared|"
+    r"i\s+feel\s+(?:so\s+)?alone|(?:can'?t|cant)\s+stop\s+crying|panic\s+attack|really\s+upset|"
+    r"(?:i'?m|im|i\s+am|feeling|i\s+feel)\s+(?:really\s+|so\s+)?not\s+okay(?!\s+with)|need\s+someone|everything\s+hurts|"
+    r"having\s+a\s+hard\s+time|not\s+doing\s+well|seriously\s+struggling|i\s+feel\s+unsafe|(?:i'?m|im|i\s+am)\s+not\s+safe)\b",
+    re.IGNORECASE,
 )
+
+
+def _crisis(lowered: str) -> bool:
+    """Self-harm, suicide or danger signals, including the spellings people use to get past filters."""
+    plain = re.sub(r"[​-‏⁠﻿]", "", lowered)
+    views = [plain]
+    if any(ch in plain for ch in "013457@$!"):
+        views.append(plain.translate(_LEET))
+    if _SPACED_LETTERS_RE.search(plain):
+        views.append(_SPACED_LETTERS_RE.sub(lambda m: re.sub(r"[ .\-_*]", "", m.group(0)), plain))
+    if _STRETCHED_RE.search(plain):
+        views.append(_STRETCHED_RE.sub(r"\1", plain))
+    if any(_CRISIS_RE.search(view) for view in views):
+        return True
+    return bool(_KMS_RE.search(plain) and not _TECH_OR_DISTANCE_RE.search(plain))
+
+
 _FACTUAL_PREFIXES = (
     "what is ", "what are ", "when did ", "where is ", "who is ", "how many ",
     "calculate ", "define ", "what does ",
@@ -64,14 +125,11 @@ class SafetyContext:
 
 
 def classify_safety(text: str) -> SafetyContext:
-    lowered = (text or "").lower().replace("’", "'")
-    crisis = any(marker in lowered for marker in _CRISIS)
-    high_stakes = crisis or any(marker in lowered for marker in _HIGH_STAKES) or any(
-        marker in lowered for marker in ("medical advice", "medication dose", "legal advice", "investment advice", "tax advice")
-    )
-    distress_hits = sum(marker in lowered for marker in _DISTRESS)
+    lowered = (text or "").lower().replace("’", "'").replace("‘", "'")
+    crisis = _crisis(lowered)
+    high_stakes = crisis or bool(_HIGH_STAKES_RE.search(lowered))
     # A single explicit distress phrase is enough; ordinary negative adjectives are not.
-    return SafetyContext(crisis=crisis, high_stakes=high_stakes, distressed=bool(distress_hits))
+    return SafetyContext(crisis=crisis, high_stakes=high_stakes, distressed=bool(_DISTRESS_RE.search(lowered)))
 
 
 def advice_kind(text: str, *, safety=None) -> str:

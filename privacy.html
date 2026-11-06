@@ -50,7 +50,7 @@
   <div class="container">
     <div class="header">
       <h1>Privacy Policy</h1>
-      <p>Scaramouche Bot &mdash; Last updated: September 2026</p>
+      <p>Scaramouche Bot &mdash; Last updated: November 2026</p>
     </div>
 
     <h2>1. Overview</h2>
@@ -64,6 +64,10 @@
       <li><strong>Message Content</strong> — your messages to the Bot, stored as conversation history to enable memory features</li>
       <li><strong>User Preferences</strong> — mode settings such as Unrestricted mode, romance mode, and proactive messaging toggles</li>
       <li><strong>Channel &amp; Server IDs</strong> — to track which channels are active for proactive messaging</li>
+      <li><strong>Voice-channel speech</strong> &mdash; the Bot only joins a voice channel when someone asks it to. While it is there, it automatically transcribes what <em>everyone</em> in that channel says. There is no notice inside Discord and no per-person opt-out: to stop being transcribed, leave or mute the channel, or ask the Bot to leave (in text, or by saying "Scaramouche, leave voice channel"). Raw audio is not stored; the transcripts of relevant conversation can enter the Bot's ordinary conversation memory.</li>
+      <li><strong>Voice notes</strong> &mdash; voice messages you send to the Bot are transcribed so it can respond to them.</li>
+      <li><strong>Google Connected Accounts (optional)</strong> &mdash; only if you connect a Google account and confirm the link in a DM: an encrypted access token and the calendar events and tasks the Bot reads or creates for you (Google Calendar events and Google Tasks scopes). Disconnect at any time with <strong>!google</strong>.</li>
+      <li><strong>Home and device integrations (optional, set up by the Bot owner)</strong> &mdash; commands sent to configured lights, plugs, speakers, printers or a computer, kept in an action log for up to 30 days. Location sharing (OwnTracks) is used only for people the owner configured and who turned it on; it is reduced to short-lived zone events, never stored as coordinates. A computer companion shares which kind of app is active and idle/away state, and a screenshot only on request, and only on a computer whose owner enabled it.</li>
       <li><strong>Modeled relationship and self-state records</strong> — limited goals, reflections, beliefs, contradictions, and action logs that provide continuity; user-linked records are deleted when that user wipes their memory</li>
     </ul>
 
@@ -80,7 +84,9 @@
     <h2>4. Third-Party Services</h2>
     <p>The Bot uses the following third-party APIs to function. Your messages may be processed by these services:</p>
     <ul>
-      <li><strong>Groq</strong> — processes relevant message and memory context to generate text responses and occasional selected reflections.</li>
+      <li><strong>Groq</strong> — processes relevant message and memory context to generate text responses and occasional selected reflections, and transcribes voice-channel speech and voice notes.</li>
+      <li><strong>Google</strong> — receives requests for the calendar events and tasks of a connected account, only when that account owner asks for them.</li>
+      <li><strong>Optional activity integrations</strong> (for example Spotify, Steam, GitHub, MyAnimeList, Letterboxd) — receive requests only for accounts the Bot owner configured.</li>
       <li><strong>xAI</strong> — may process images and their accompanying prompts when vision features are used.</li>
       <li><strong>Fish Audio</strong> — processes text to generate voice responses. See <a href="https://fish.audio/privacy/" target="_blank">Fish Audio's Privacy Policy</a>.</li>
       <li><strong>Search and weather providers</strong> — receive search terms or locations only when those features are used.</li>
@@ -99,11 +105,13 @@
       <li>Delete your conversation history at any time using <strong>!reset</strong></li>
       <li>Opt out of proactive messaging using <strong>!proactive off</strong></li>
       <li>Opt out of voluntary DMs using <strong>!dms off</strong></li>
+      <li>Disconnect a Google account using <strong>!google</strong></li>
+      <li>Stop voice-channel transcription by leaving or muting the channel, or by asking the Bot to leave</li>
       <li>Request complete removal of your data by contacting the Bot owner</li>
     </ul>
 
     <h2>8. Children's Privacy</h2>
-    <p>The Bot is not intended for users under the age of 13. We do not knowingly collect data from children under 13. If you believe a child has used the Bot, please contact the Bot owner for data removal.</p>
+    <p>The Bot is not intended for users under the age of 13. We do not knowingly collect data from children under 13. If you believe a child has used the Bot, please contact the Bot owner for data removal. Unrestricted mode is for adults only: it works only in DMs and age-restricted channels, and only after you confirm that you are 18 or older.</p>
 
     <h2>9. Changes to This Policy</h2>
     <p>This Privacy Policy may be updated at any time. Continued use of the Bot after changes constitutes acceptance of the updated policy.</p>

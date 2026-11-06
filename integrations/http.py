@@ -39,6 +39,10 @@ class AsyncJSONClient:
         self.sleep = sleep or asyncio.sleep
 
     async def request(self, method: str, url: str, *, headers=None, json=None, data=None, expected=(200, 201)):
+        # A POST/PATCH that timed out or got a 5xx may already have been carried out (a calendar event, a task, an
+        # issue, a playlist): retrying it can create a duplicate. Only requests that safely repeat are retried after
+        # an ambiguous failure; a 429 or a refused connection means nothing was done, so those are retried for all.
+        repeatable = method.upper() in {"GET", "HEAD", "OPTIONS", "PUT", "DELETE"}
         for attempt in range(2):
             try:
                 async with self.session_factory(timeout=self.timeout) as session:
@@ -51,7 +55,7 @@ class AsyncJSONClient:
                             raise IntegrationAuthError()
                         if response.status == 403:
                             raise IntegrationForbiddenError()
-                        if response.status == 429 or response.status >= 500:
+                        if response.status == 429 or (response.status >= 500 and repeatable):
                             if attempt == 0:
                                 retry_after = response.headers.get("Retry-After", "1")
                                 try:
@@ -70,11 +74,11 @@ class AsyncJSONClient:
                             raise IntegrationError("integration request was rejected", IntegrationErrorCategory.INVALID_REQUEST)
                         raise IntegrationError("integration request failed", IntegrationErrorCategory.PROVIDER_UNAVAILABLE)
             except asyncio.TimeoutError as exc:
-                if attempt == 0:
+                if attempt == 0 and repeatable:
                     continue
                 raise IntegrationError("integration request timed out", IntegrationErrorCategory.TIMEOUT) from exc
             except aiohttp.ClientError as exc:
-                if attempt == 0:
+                if attempt == 0 and (repeatable or isinstance(exc, aiohttp.ClientConnectorError)):
                     await self.sleep(0.25)
                     continue
                 raise IntegrationError(

@@ -30,7 +30,7 @@ def test_fresh_install_records_independent_current_schema_versions(tmp_path):
 
     status = run(memory.schema_status())
     assert status["local"] == {
-        "scope": "local", "version": 6, "current": 6, "pending": 0, "error": ""
+        "scope": "local", "version": 7, "current": 7, "pending": 0, "error": ""
     }
     assert status["shared"] == {
         "scope": "shared", "version": 2, "current": 2, "pending": 0, "error": ""
@@ -70,7 +70,7 @@ def test_current_schema_without_metadata_bootstraps_without_data_loss(tmp_path):
     run(reopened.init())
     assert run(reopened.get_user(44))["display_name"] == "Legacy User"
     assert run(reopened.get_history(44, 91))[0]["content"] == "keep this history"
-    assert run(reopened.schema_status())["local"]["version"] == 6
+    assert run(reopened.schema_status())["local"]["version"] == 7  # 7: adult_confirmation
 
 
 @pytest.mark.parametrize("legacy_value", [0, 1])
@@ -96,7 +96,7 @@ def test_retired_mode_value_is_preserved_once_for_unrestricted(tmp_path, legacy_
     run(reopened.set_mode(71, "unrestricted_mode", not bool(legacy_value)))
     run(reopened.init())
     assert run(reopened.get_user(71))["unrestricted_mode"] is not bool(legacy_value)
-    assert run(reopened.schema_status())["local"]["version"] == 6
+    assert run(reopened.schema_status())["local"]["version"] == 7  # 7: adult_confirmation
     assert run(reopened.schema_status())["shared"]["version"] == 2
 
 
@@ -205,7 +205,7 @@ def test_two_initializers_share_migration_history_without_lock_failure(tmp_path)
         rows = db.execute(
             "SELECT version,COUNT(*) FROM schema_migrations WHERE scope='local' GROUP BY version"
         ).fetchall()
-        assert rows == [(1, 1), (2, 1), (3, 1), (4, 1), (5, 1), (6, 1)]
+        assert rows == [(1, 1), (2, 1), (3, 1), (4, 1), (5, 1), (6, 1), (7, 1)]
     with sqlite3.connect(shared) as db:
         rows = db.execute(
             "SELECT version,COUNT(*) FROM schema_migrations WHERE scope='shared' GROUP BY version"

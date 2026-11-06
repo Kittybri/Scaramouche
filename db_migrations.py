@@ -159,6 +159,12 @@ async def _local_unrestricted_mode(db, _bot_name):
         )
 
 
+async def _local_adult_confirmation(db, _bot_name):
+    """Unrestricted mode needs a stored 18+ confirmation. Nobody is grandfathered in: an existing preference stays
+    stored but has no effect until that person confirms."""
+    await ensure_columns(db, "users", {"adult_confirmed": "INTEGER DEFAULT 0"})
+
+
 async def _shared_duo_columns(db, _bot_name):
     await ensure_columns(db, "duo_sessions", {
         "initiator_user_id": "INTEGER DEFAULT 0",
@@ -179,6 +185,7 @@ LOCAL_MIGRATIONS = (
     Migration(4, "unrestricted_mode_preference", _local_unrestricted_mode),
     Migration(5, "restore_scoped_harbinger_campaigns", _restore_character_storage),
     Migration(6, "restore_user_birthdays", _restore_birthday_storage),
+    Migration(7, "adult_confirmation", _local_adult_confirmation),
 )
 SHARED_MIGRATIONS = (
     Migration(1, "duo_session_columns", _shared_duo_columns),

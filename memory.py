@@ -13,6 +13,7 @@ import time
 import json
 import logging
 import os
+import random  # random_mood_swing used to rely on bot.py patching this module (memory.random = random)
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from db_migrations import (
@@ -431,7 +432,7 @@ class Memory:
                        milestone_last,first_seen,last_seen,last_active,greeted_today,anniversary_last,
                        slow_burn,slow_burn_fired,drift_score,memory_summary,last_statement,
                        style_profile,emotional_arc,conflict_open,conflict_summary,last_conflict_ts,repair_progress,
-                       callback_memory,callback_ts,repair_count,weather_location
+                       callback_memory,callback_ts,repair_count,weather_location,adult_confirmed
                 FROM users WHERE user_id=?
             """, (user_id,)) as cur:
                 row = await cur.fetchone()
@@ -464,6 +465,7 @@ class Memory:
                     "callback_ts": row[37] or 0,
                     "repair_count": row[38] or 0,
                     "weather_location": row[39] or "",
+                    "adult_confirmed": bool(row[40]),
                 }
         prefs = await self.get_user_preferences(user_id)
         user.update(prefs)
@@ -900,7 +902,7 @@ class Memory:
         }
 
     async def set_mode(self, user_id: int, field: str, value: bool):
-        allowed = {"unrestricted_mode","romance_mode","proactive","allow_dms"}
+        allowed = {"unrestricted_mode","romance_mode","proactive","allow_dms","adult_confirmed"}
         if field not in allowed: raise ValueError(f"Unknown: {field}")
         async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute(f"UPDATE users SET {field}=? WHERE user_id=?", (int(value), user_id))
@@ -1490,6 +1492,19 @@ class Memory:
                 return count, True
         return count, False
 
+    async def get_top_users_in_guild(self, guild_id: int, limit: int = 60) -> list[dict]:
+        """Who talks to the bot most in one server, counted from that server's own messages. DMs and other servers
+        never count, so a ranking cannot reveal activity elsewhere or list people from other servers."""
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
+            async with db.execute(
+                "SELECT m.user_id, COUNT(*) AS n FROM messages m JOIN channels c ON c.channel_id=m.channel_id "
+                "WHERE c.guild_id=? AND m.role='user' AND m.user_id>0 AND (m.bot_name=? OR m.bot_name IS NULL) "
+                "GROUP BY m.user_id ORDER BY n DESC, m.user_id LIMIT ?",
+                (guild_id, self.bot_name, limit),
+            ) as cur:
+                rows = await cur.fetchall()
+        return [{"user_id": r[0], "message_count": r[1]} for r in rows]
+
     async def get_top_users(self, limit: int = 8) -> list[dict]:
         async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute(
@@ -1717,9 +1732,25 @@ class Memory:
             async with db.execute("SELECT content FROM messages WHERE user_id=? AND role='user' AND (bot_name=? OR bot_name IS NULL) AND ts<? ORDER BY RANDOM() LIMIT 1", (user_id,self.bot_name,cutoff)) as cur:
                 row = await cur.fetchone(); return row[0] if row else None
 
-    async def get_recent_messages(self, user_id: int, limit: int = 10) -> list[str]:
+    async def get_recent_messages(
+        self, user_id: int, limit: int = 10, *, guild_id: int | None = None, public_only: bool = False,
+    ) -> list[str]:
+        """A user's recent messages. ``guild_id`` limits them to that server's channels and ``public_only`` to any
+        server channel; either way DMs (and, with ``guild_id``, other servers) are left out. Use one of them whenever
+        the result can end up in front of other people."""
+        join, extra, params = "", "", [user_id, self.bot_name]
+        if guild_id is not None or public_only:
+            join = " JOIN channels c ON c.channel_id=m.channel_id"
+            if guild_id is not None:
+                extra = " AND c.guild_id=?"
+                params.append(guild_id)
+        params.append(limit)
         async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
-            async with db.execute("SELECT content FROM messages WHERE user_id=? AND role='user' AND (bot_name=? OR bot_name IS NULL) ORDER BY ts DESC LIMIT ?", (user_id,self.bot_name,limit)) as cur:
+            async with db.execute(
+                f"SELECT m.content FROM messages m{join} WHERE m.user_id=? AND m.role='user' "
+                f"AND (m.bot_name=? OR m.bot_name IS NULL){extra} ORDER BY m.ts DESC LIMIT ?",
+                params,
+            ) as cur:
                 return [r[0] for r in await cur.fetchall()]
 
     async def get_channel_recent(self, channel_id: int, limit: int = 20) -> list[dict]:

@@ -400,9 +400,11 @@ def test_owner_diagnostics_check_exact_nonzero_owner(monkeypatch):
 
 def test_unrestricted_prompt_requires_an_allowed_channel(monkeypatch):
     runtime = load_runtime(monkeypatch)
-    user = {"unrestricted_mode": True, "romance_mode": False}
+    user = {"unrestricted_mode": True, "romance_mode": False, "adult_confirmed": True}
     assert "## Unrestricted Mode" not in runtime.build_system(user)
     assert "## Unrestricted Mode" in runtime.build_system(user, allow_unrestricted=True)
+    unconfirmed = {"unrestricted_mode": True, "romance_mode": False}
+    assert "## Unrestricted Mode" not in runtime.build_system(unconfirmed, allow_unrestricted=True)
     discord_age_flag = "is_" + "ns" + "fw"
     public = SimpleNamespace(guild=object(), **{discord_age_flag: lambda: False})
     restricted = SimpleNamespace(guild=object(), **{discord_age_flag: lambda: True})
@@ -419,7 +421,8 @@ def test_unrestricted_command_reads_and_writes_renamed_preference(
     monkeypatch, mode, current, expected
 ):
     runtime = load_runtime(monkeypatch)
-    setup = AsyncMock(return_value={"unrestricted_mode": current})
+    # an adult who already confirmed: the command just flips the renamed preference
+    setup = AsyncMock(return_value={"unrestricted_mode": current, "adult_confirmed": True})
     set_mode = AsyncMock()
     reply = AsyncMock()
     monkeypatch.setattr(runtime, "_setup", setup)
@@ -435,6 +438,23 @@ def test_unrestricted_command_reads_and_writes_renamed_preference(
     set_mode.assert_awaited_once_with(73, "unrestricted_mode", expected)
     reply.assert_awaited_once()
     assert runtime.bot.get_command("ns" + "fw") is None
+
+
+def test_unrestricted_needs_an_adult_confirmation_first(monkeypatch):
+    runtime = load_runtime(monkeypatch)
+    monkeypatch.setattr(runtime, "_setup", AsyncMock(return_value={"unrestricted_mode": False}))
+    set_mode = AsyncMock()
+    monkeypatch.setattr(runtime.mem, "set_mode", set_mode)
+    ctx = SimpleNamespace(author=SimpleNamespace(id=73), guild=None, channel=None, reply=AsyncMock())
+
+    run(runtime.bot.get_command("unrestricted").callback(ctx, "on"))
+
+    set_mode.assert_not_awaited()  # DMs are not age-restricted: nothing changes before the 18+ confirmation
+    assert isinstance(ctx.reply.await_args.kwargs["view"], runtime.AdultConfirmView)
+    assert "18" in ctx.reply.await_args.args[0]
+    # and the prompt ignores a stored preference that was never confirmed
+    assert "Unrestricted Mode" not in runtime.build_system({"unrestricted_mode": True}, allow_unrestricted=True)
+    assert "Unrestricted Mode" in runtime.build_system({"unrestricted_mode": True, "adult_confirmed": True}, allow_unrestricted=True)
 
 
 def test_member_announcements_are_rate_limited_per_guild(monkeypatch):
