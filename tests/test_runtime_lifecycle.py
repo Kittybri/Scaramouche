@@ -407,6 +407,9 @@ def test_unrestricted_prompt_requires_an_allowed_channel(monkeypatch):
     romance = {**user, "romance_mode": True}
     assert "## Unrestricted Romance — Kai" in runtime.build_system(romance, "Kai", allow_unrestricted=True)
     assert "Unrestricted" not in runtime.build_system(romance, "Kai")
+    for prompt in (runtime.build_system(user, allow_unrestricted=True),
+                   runtime.build_system(romance, "Kai", allow_unrestricted=True)):
+        assert "under 18, none of this applies" in prompt
     unconfirmed = {"unrestricted_mode": True, "romance_mode": False}
     assert "## Unrestricted Mode" not in runtime.build_system(unconfirmed, allow_unrestricted=True)
     discord_age_flag = "is_" + "ns" + "fw"
