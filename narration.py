@@ -64,8 +64,9 @@ _SPEECH_TAG_RE = re.compile(
 )
 _ANY_MENTION_RE = re.compile(r"<@!?\d+>|<#\d+>|<@&\d+>")
 _ROLE_MENTION_RE = re.compile(r"<@&\d+>")
-# First '@' of a run, possessive: linear on "@@@@..." and no word boundary (Discord pings "@herewhat" too).
-_MASS_MENTION_RE = re.compile(r"(?<!@)@++(?=everyone|here)", re.IGNORECASE)
+# From the first '@' of a run (the lookbehind keeps it linear on "@@@@..."; no possessive quantifier,
+# which needs Python 3.11) and no word boundary (Discord pings "@herewhat" too).
+_MASS_MENTION_RE = re.compile(r"(?<!@)@+(?=everyone|here)", re.IGNORECASE)
 _SENTENCE_END = ".!?…:;"
 _CLOSERS = "\"”’)]"
 
