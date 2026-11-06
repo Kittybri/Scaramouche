@@ -227,6 +227,7 @@ async def test_memories_in_a_server_are_sent_privately(runtime, monkeypatch, mem
     "I'm suicidal", "thinking about self-harm", "I'm killing myself tonight", "I want to unalive myself", "i wanna kms",
     "I want to end my life", "I don't want to live anymore", "nobody would miss me if I was gone", "I took too many pills",
     "I want to die", "I'm going to kill myself", "I can't go on like this", "su1c1de", "k1ll myself", "s u i c i d e",
+    "i want to killmyself", "kill\u200bmyself", "ki\u200bll myself",
 ])
 def test_crisis_phrasings_are_recognised(text):
     from awareness_features import classify_safety
@@ -237,7 +238,7 @@ def test_crisis_phrasings_are_recognised(text):
 @pytest.mark.parametrize("text", [
     "this poison build is so broken lol", "can't go on vacation this year", "that boss knocked me unconscious lol",
     "I'm not okay with pineapple pizza", "I walked 5 kms", "suicide squad was fine", "I cut myself shaving",
-    "Scaramouche is annoyingly dramatic",
+    "Scaramouche is annoyingly dramatic", "I hurt myself at the gym",
 ])
 def test_everyday_text_is_not_treated_as_an_emergency(text):
     from awareness_features import classify_safety
@@ -273,6 +274,8 @@ async def test_no_unsolicited_replies_over_keywords_and_opt_out_is_respected(run
     monkeypatch.setattr(runtime, "_priority_reply", priority)
     monkeypatch.setattr(runtime, "_on_message_routed", routed)
     monkeypatch.setattr(runtime, "_interaction_session", AsyncMock(return_value=("", None)))
+    quiet = {"now": False}  # pinned: the default quiet hours (23:00-08:00) would otherwise depend on when this runs
+    monkeypatch.setattr(runtime, "_is_in_quiet_hours", lambda user: quiet["now"])
     runtime._UNSOLICITED_PROTECTIVE.clear()
 
     def memory_for(user):
@@ -290,6 +293,10 @@ async def test_no_unsolicited_replies_over_keywords_and_opt_out_is_respected(run
     assert priority.await_count == 0  # keywords alone never make the bot answer a message that was not for it
     await dispatch(8004, "honestly i just want to die", {"proactive": False})
     assert priority.await_count == 0  # an opted-out person is not answered unprompted either
+    quiet["now"] = True
+    await dispatch(8009, "honestly i just want to die", {"proactive": True})
+    assert priority.await_count == 0  # nor during their quiet hours
+    quiet["now"] = False
     await dispatch(8005, "honestly i just want to die", {"proactive": True})
     await dispatch(8006, "i really want to die", {"proactive": True})
     assert priority.await_count == 1  # a real crisis signal gets one protective reply, then a cooldown

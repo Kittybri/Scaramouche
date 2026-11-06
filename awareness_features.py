@@ -13,13 +13,13 @@ _WORD_RE = re.compile(r"[a-z0-9']+")
 # "poison" or "not okay" alone fire on game chat and pizza opinions.
 _SELF = r"my\s?self"
 _CRISIS_PATTERNS = (
-    rf"\bkill(?:ing)?\s+{_SELF}\b",
+    rf"\bkill(?:ing)?\s*{_SELF}\b",  # "killmyself" too
     r"\bsuicid(?:e|al)\b(?!\s+(?:squad|mission|prevention|hotline|bombers?|moves?|plays?|strateg(?:y|ies)|tactics?|charge|run|rush|attack|dive|jump|decision|idea|driving|driver|speed|enem(?:y|ies)|fun|pilot|raid))",
     r"\b(?:sewer\s?slide|sewerslide|suisside)\b",
     r"\bself[\s-]?(?:harm|injur(?:y|ing|e))(?:ing)?\b",
     rf"\bun-?aliv(?:e|ing)\s+(?:{_SELF}|me)\b",
     r"\b(?:want|wanna|going|gonna|plan(?:ning|s)?|trying|thinking(?:\s+(?:of|about))?|about|ready)\s+(?:to\s+)?un-?aliv(?:e|ing)\b",
-    rf"\b(?:off|offing|end|ending)\s+{_SELF}\b",
+    rf"\b(?:off|offing|end|ending)\s*{_SELF}\b",
     r"\bend(?:ing)?\s+(?:my\s+(?:own\s+)?life|it\s+all)\b",
     r"\btak(?:e|ing)\s+my\s+(?:own\s+)?life\b",
     r"\b(?:i'?m|im|i\s+am|i'?ll|i\s+will|gonna|going\s+to|about\s+to|ready\s+to|planning\s+to|want\s+to|wanna)\s+(?:just\s+)?end(?:ing)?\s+it\b(?!\s+(?:with|between|here|for\s+good\s+with)\b)",
@@ -33,8 +33,8 @@ _CRISIS_PATTERNS = (
     r"\b(?:done|finished|through|tired|sick)\s+(?:with|of)\s+(?:life(?!'s)|living|being\s+alive)\b",
     r"\b(?:no\s?one|nobody)\s+(?:would|will|'?d)\s+(?:even\s+)?(?:miss\s+me|notice\s+(?:me\s+gone|if\s+i)|care\s+if\s+i\s+(?:died|was\s+gone|were\s+gone|disappeared|wasn'?t\s+here|didn'?t\s+exist))\b",
     r"\bcan'?t\s+go\s+on\b(?!\s+(?:vacation|holiday|a\s+trip|the\s+trip|trips?|a\s+date|dates|the\s+ride|rides?|stage|tour|break|without\s+(?:coffee|food|tea|sleep|my\s+\w+)))",
-    rf"\b(?:hurt|hurting|harm|harming)\s+{_SELF}\b(?!\s+(?:at|while|in|during|playing|running|lifting|training|working|on)\b)",
-    rf"\bcut(?:ting)?\s+{_SELF}\b(?!\s+(?:shaving|cooking|chopping|slicing|opening|on\s+(?:a|the|some)?\s*(?:paper|glass|knife)|while|with\s+a\s+(?:paper|kitchen)))",
+    rf"\b(?:hurt|hurting|harm|harming)\s*{_SELF}\b(?!\s+(?:at|while|in|during|playing|running|lifting|training|working|on)\b)",
+    rf"\bcut(?:ting)?\s*{_SELF}\b(?!\s+(?:shaving|cooking|chopping|slicing|opening|on\s+(?:a|the|some)?\s*(?:paper|glass|knife)|while|with\s+a\s+(?:paper|kitchen)))",
     rf"\b(?:hang|hanging|shoot|shooting|stab|stabbing|drown|drowning|poison|poisoning|starve|starving|suffocate|suffocating|strangle|strangling)\s+{_SELF}\b",
     r"\b(?:slit|slitting|cut|cutting|slash|slashing)\s+my\s+(?:own\s+)?(?:wrists?|throat|veins?)\b",
     r"\b(?:going|gonna|want|wanna|about)\s+(?:to\s+)?jump\s+(?:off|from)\s+(?:a|the|this)\s+(?:bridge|building|roof|balcony|cliff)\b",
@@ -53,6 +53,7 @@ _TECH_OR_DISTANCE_RE = re.compile(r"\b(?:aws|azure|gcp|gcloud|windows|office|act
 _LEET = str.maketrans("013457@$!", "oieastasi")
 _SPACED_LETTERS_RE = re.compile(r"\b(?:[a-z][ .\-_*]){2,}[a-z]\b")
 _STRETCHED_RE = re.compile(r"([a-z])\1{2,}")
+_ZERO_WIDTH_RE = re.compile(r"[\u200b-\u200f\u2060\ufeff]")
 _HIGH_STAKES_RE = re.compile(
     r"\b(?:medical\s+emergency|chest\s+pain|(?:can'?t|cannot|cant)\s+breathe|severe\s+bleeding|emergency\s+room|"
     r"call\s+911|police\s+emergency|legal\s+emergency|restraining\s+order|house\s+is\s+on\s+fire|gas\s+leak|"
@@ -72,8 +73,10 @@ _DISTRESS_RE = re.compile(
 
 def _crisis(lowered: str) -> bool:
     """Self-harm, suicide or danger signals, including the spellings people use to get past filters."""
-    plain = re.sub(r"[​-‏⁠﻿]", "", lowered)
+    plain = _ZERO_WIDTH_RE.sub("", lowered)
     views = [plain]
+    if plain != lowered:  # a zero-width character can hide inside a word or stand in for the space between two
+        views.append(_ZERO_WIDTH_RE.sub(" ", lowered))
     if any(ch in plain for ch in "013457@$!"):
         views.append(plain.translate(_LEET))
     if _SPACED_LETTERS_RE.search(plain):
