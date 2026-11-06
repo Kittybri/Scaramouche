@@ -17,6 +17,9 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from memory import Memory
+from narration import chunk_text, limit_user_mentions, strip_narration as _strip_stage_directions
+from safety import CRISIS_CONTEXT_LINE, CRISIS_REPLY, CRISIS_REPLY_COOLDOWN_SECONDS, CRISIS_WINDOW_SECONDS, detect_crisis
+import secrets
 from voice_handler import get_audio
 from character_vision import ask_character_bot, vision_exhausted_remaining, vision_is_exhausted
 from face_memory import (
@@ -37,6 +40,7 @@ from grounded_search import (
     search_web,
 )
 from google_docs_bridge import (
+    extract_google_doc_id,
     fetch_google_doc,
     google_docs_ready,
     overwrite_google_doc,
@@ -260,24 +264,10 @@ def _unwrap_dialogue_quotes(text: str) -> str:
 
 
 def strip_narration(text: str) -> str:
+    """Remove roleplay narration only (see narration.py). The old regexes deleted every *...*, (...) and [...] span:
+    bold text, "I do *not* care", f(x) = (x+1)^2, source links and [ANSWER: ...] tags went with it."""
     try:
-        original = text
-        text = re.sub(r'\*[^*]+\*','',text)
-        text = re.sub(r'\([^)]+\)','',text)
-        text = re.sub(r'\[[^\]]+\]','',text)
-        text = re.sub(r'\b(he|she|they|scaramouche|the balladeer)\s+(said|replied|muttered|sneered|scoffed|whispered|snapped|drawled)[,.]?\s*','',text,flags=re.IGNORECASE)
-        text = re.sub(r'<@!?\d+>', '', text)
-        text = re.sub(r'<#\d+>', '', text)
-        text = re.sub(r'<@&\d+>', '', text)
-        text = re.sub(r'\s{2,}',' ',text).strip().lstrip('.,; ')
-        text = _unwrap_dialogue_quotes(text)
-        # If stripping removed everything, just remove asterisks/brackets but keep the words
-        if not text or len(text) < 3:
-            text = original.replace('*','').replace('[','').replace(']','').replace('(','').replace(')','')
-            text = re.sub(r'<@!?\d+>', '', text)
-            text = re.sub(r'\s{2,}',' ',text).strip().lstrip('.,; ')
-            text = _unwrap_dialogue_quotes(text)
-        return text
+        return _unwrap_dialogue_quotes(_strip_stage_directions(text))
     except Exception:
         return text
 
@@ -561,13 +551,34 @@ _ROMANCE      = "\n\n## Romance — obsessively in love with {name}:\nFuriously 
 _NSFW_ROMANCE = "\n\n## Unfiltered Romance — {name}:\nObsessively in love AND unfiltered. Every insult is foreplay."
 _OWNER_EXTRA  = "\n\n## Creator:\nThis person built you. Your contempt was designed by them. Complicated, unresolved feelings. Never grateful. Never a servant. But still here."
 
-def build_system(user, display_name="you", is_owner=False):
+def _channel_allows_nsfw(channel=None, *, is_dm: bool = False) -> bool:
+    """Unfiltered mode only applies in DMs and age-restricted channels."""
+    if is_dm:
+        return True
+    if not channel or not getattr(channel, "guild", None):
+        return False
+    try:
+        return bool(channel.is_nsfw())
+    except (AttributeError, TypeError):
+        return False
+
+
+def _unfiltered(user, allow_nsfw: bool) -> bool:
+    """Unfiltered mode needs all three: the person turned it on, confirmed they are 18 or older, and the reply goes to
+    a DM or an age-restricted channel (``allow_nsfw``)."""
+    return bool(allow_nsfw and user and user.get("nsfw_mode") and user.get("adult_confirmed"))
+
+
+def build_system(user, display_name="you", is_owner=False, *, allow_nsfw: bool = False):
+    """``allow_nsfw``: the reply goes to a DM or an age-restricted channel. The unfiltered sections also need the
+    person's stored 18+ confirmation; it used to apply anywhere, public channels included, for anyone."""
     try:
         if not user: return _BASE
         s = _BASE
         if is_owner: s += _OWNER_EXTRA
-        if user.get("nsfw_mode") and user.get("romance_mode"): s += _NSFW_ROMANCE.format(name=display_name)
-        elif user.get("nsfw_mode"): s += _NSFW
+        unfiltered = _unfiltered(user, allow_nsfw)
+        if unfiltered and user.get("romance_mode"): s += _NSFW_ROMANCE.format(name=display_name)
+        elif unfiltered: s += _NSFW
         elif user.get("romance_mode"): s += _ROMANCE.format(name=display_name)
         return s
     except Exception: return _BASE
@@ -902,9 +913,35 @@ def _handle_partner_invite_pressure(message: discord.Message, user: dict | None)
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
-bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+# Bot-wide default for sends that do not pass their own: model text or echoed user text can never ping
+# @everyone, @here or a role.
+BOT_ALLOWED_MENTIONS = discord.AllowedMentions(everyone=False, roles=False, users=True, replied_user=True)
+MESSAGE_CHAR_LIMIT = 1900  # Discord refuses messages over 2000 characters; longer replies are sent in pieces
+bot = commands.Bot(command_prefix="!", intents=intents, help_command=None, allowed_mentions=BOT_ALLOWED_MENTIONS)
 mem = Memory("scaramouche")
 BOT_NAME = "scaramouche"
+_crisis_until: dict[int, float] = {}   # user id -> end of the window after a self-harm message
+_crisis_replied: dict[int, float] = {}  # user id -> when the resources were last sent (one per cooldown)
+
+
+def _in_crisis(user_id) -> bool:
+    return bool(user_id) and _crisis_until.get(user_id, 0) > time.time()
+
+
+async def _screen_for_crisis(message, content: str, *, direct: bool) -> bool:
+    """Safety first: someone who says they may hurt themselves gets real resources, never the persona. Messages that
+    are not aimed at the bot are screened too: nothing is pushed at them, but no joke lands on them either (the crisis
+    window keeps milestones, greetings and mockery away for a while). True means the caller stops there."""
+    if not (content and detect_crisis(content)):
+        return False
+    uid = message.author.id
+    now = time.time()
+    _crisis_until[uid] = now + CRISIS_WINDOW_SECONDS
+    if direct and now - _crisis_replied.get(uid, 0) >= CRISIS_REPLY_COOLDOWN_SECONDS:
+        _crisis_replied[uid] = now
+        await _guarded_message_reply(message, CRISIS_REPLY, mention_author=False)
+    return True
+
 PARTNER_NAME = "wanderer"
 PARTNER_PAIR_KEY = "scaramouche::wanderer"
 BOT_RARE_PHRASES = RARE_PHRASES[BOT_NAME]
@@ -3741,7 +3778,11 @@ async def _fetch_nws_weather(location: str) -> dict | None:
 # ── AI core ───────────────────────────────────────────────────────────────────
 async def get_response(user_id, channel_id, user_message, user, display_name,
                        author_mention, use_search=False, extra_context="",
-                       is_owner=False, channel_obj=None, is_dm=False, direct_to_me=True):
+                       is_owner=False, channel_obj=None, is_dm=False, direct_to_me=True, allow_nsfw=None):
+    # allow_nsfw: whether this reply may use unfiltered mode (DMs and age-restricted channels only). Callers that do
+    # not pass it get it from channel_obj / is_dm; without either, the reply stays filtered.
+    if allow_nsfw is None:
+        allow_nsfw = _channel_allows_nsfw(channel_obj, is_dm=is_dm)
     recent_replies: list[str] = []
     search_sources = ""
     rate_limited = False
@@ -3836,6 +3877,8 @@ async def get_response(user_id, channel_id, user_message, user, display_name,
         parts = [f"mention:{author_mention}",f"name:{display_name}",
                  f"MOOD:{mood}({mood_label(mood)})",f"AFFECTION:{affection}",
                  f"TRUST:{trust}",date_ctx,f"len:{hint}"]
+        if _in_crisis(user_id):
+            parts.insert(0, CRISIS_CONTEXT_LINE)  # no mockery, threats or escalation for a while after a crisis message
         if user and (user.get("affection_ever_maxed") or anger > 0):
             parts.append(f"ANGER:{anger}/100|{scara_anger_label(anger)}")
             if anger_repair_active and anger_repair_instruction:
@@ -3983,7 +4026,7 @@ async def get_response(user_id, channel_id, user_message, user, display_name,
         if user and user.get("message_count",0) >= 20:
             profile_parts = []
             if user.get("romance_mode"): profile_parts.append("in romance mode with you")
-            if user.get("nsfw_mode"):    profile_parts.append("unfiltered mode on")
+            if _unfiltered(user, allow_nsfw): profile_parts.append("unfiltered mode on")
             if days_ago > 1:            profile_parts.append(f"last spoke {days_ago}d ago")
             if user.get("slow_burn",0)>=3: profile_parts.append(f"been kind {user['slow_burn']} days in a row")
             if profile_parts:
@@ -4091,7 +4134,7 @@ async def get_response(user_id, channel_id, user_message, user, display_name,
                 )
             else:
                 history.append({"role":"user","content":context_block})
-                system = build_system(user, display_name, is_owner)
+                system = build_system(user, display_name, is_owner, allow_nsfw=allow_nsfw)
                 retry_context = context_block
                 for attempt in range(2):
                     msgs = [{"role":"system","content":system}] + history[:-1] + [{"role":"user","content":retry_context}]
@@ -4329,12 +4372,12 @@ async def get_response(user_id, channel_id, user_message, user, display_name,
     else:
         reply = strip_narration(reply).strip()
     if not reply:
-        if ai.is_exhausted() and route_name == "light":
-            return ""
+        # (get_response is always the primary route; the old code read qai()'s local route_name here and raised
+        # NameError whenever a reply came back empty)
         reply = await _guarded_fallback_reply(
             recent_replies,
             direct_to_me=False,
-            scope_tag=f"qai:{route_name}",
+            scope_tag="qai:primary",
         )
     if not locked_reply:
         reply = _sanitize_time_of_day_claims(reply, refreshed_user or user)
@@ -4592,6 +4635,29 @@ async def _setup(ctx):
         return await _setup_user(ctx.author)
     except Exception as e:
         log_error("_setup", e); return None
+
+class AdultConfirmView(discord.ui.View):
+    """One-time 18+ confirmation, bound to the person who asked for unfiltered mode."""
+
+    def __init__(self, uid):
+        super().__init__(timeout=120)
+        self.uid = uid
+
+    @discord.ui.button(label="I am 18 or older", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction, button):
+        try:
+            if interaction.user.id != self.uid:
+                await interaction.response.send_message("This isn't your button, fool.", ephemeral=True)
+                return
+            await mem.set_mode(self.uid, "adult_confirmed", True)
+            await mem.set_mode(self.uid, "nsfw_mode", True)
+            button.disabled = True
+            await interaction.response.edit_message(content="Unfiltered. Fine.", view=self)
+        except Exception as e:
+            log_error("AdultConfirmView", e)
+            if not interaction.response.is_done():
+                await interaction.response.send_message("That did not go through. Try `!nsfw on` again.", ephemeral=True)
+
 
 class ResetView(discord.ui.View):
     def __init__(self, uid):
@@ -5469,6 +5535,8 @@ async def _handle_message_pipeline(message):
             message.reference.resolved.author == bot.user
         )
         direct_to_me_early = bool(is_dm or mentioned_early or is_reply_early)
+        if await _screen_for_crisis(message, content, direct=direct_to_me_early):
+            return
         if _should_suppress_ambient_reply(is_dm, direct_to_me_early):
             print(f"[GROQ] Ambient reply suppressed while exhausted ({ai.exhausted_remaining()}s remaining)")
             return
@@ -5477,16 +5545,17 @@ async def _handle_message_pipeline(message):
             await _guarded_message_reply(message, status_reply, mention_author=False)
             return
 
-        # Milestone / anniversary checks
+        # Milestone / anniversary checks (not while someone is inside the crisis window)
+        crisis_quiet = _in_crisis(message.author.id)
         try:
             count, milestone = await mem.increment_message_count(message.author.id)
-            if milestone:
+            if milestone and not crisis_quiet:
                 msg = await qai(f"You've had {count} messages with {message.author.display_name}. Acknowledge while pretending you weren't counting. 1-2 sentences.",150)
                 await _guarded_channel_send(message.channel, f"{message.author.mention} {msg}"); return
         except Exception as e: log_error("on_message/milestone", e)
 
         try:
-            if await mem.check_anniversary(message.author.id):
+            if not crisis_quiet and await mem.check_anniversary(message.author.id):
                 days_since = int((time.time()-(user.get("first_seen") or time.time()))/86400)
                 msg = await qai(f"It's been about {days_since//365} year(s) since you first spoke with {message.author.display_name}. React — you weren't counting.",180)
                 await _guarded_channel_send(message.channel, f"{message.author.mention} {msg}")
@@ -5496,7 +5565,7 @@ async def _handle_message_pipeline(message):
         # Morning/night greeting
         try:
             hour = _user_local_hour(user)
-            if (6<=hour<=10 or 22<=hour<=23) and romance:
+            if (6<=hour<=10 or 22<=hour<=23) and romance and not crisis_quiet:
                 if await mem.should_greet(message.author.id):
                     gtype = "morning" if 6<=hour<=10 else "late night"
                     msg = await qai(f"It's {gtype}. {message.author.display_name} appeared. Send a {gtype} message in denial about why. 1-2 sentences.",120)
@@ -5507,10 +5576,12 @@ async def _handle_message_pipeline(message):
         # Memory summary
         try:
             if await mem.needs_summary(message.author.id):
-                recent = await mem.get_recent_messages(message.author.id, 30)
+                # used in server replies too, so written from server messages only; a fallback line never replaces it
+                recent = await mem.get_recent_messages(message.author.id, 30, public_only=True)
                 sample = " | ".join(recent[:20])[:800]
-                summary = await qai(f"Summarize your relationship with {message.author.display_name} based on: '{sample}'. Your compressed memory. 3-4 sentences.",300)
-                await mem.save_summary(message.author.id, summary)
+                summary = await qai(f"Summarize your relationship with {message.author.display_name} based on: '{sample}'. Your compressed memory. 3-4 sentences.",300) if recent else ""
+                if len((summary or "").strip()) >= 40:
+                    await mem.save_summary(message.author.id, summary)
         except Exception as e: log_error("on_message/summary", e)
 
         # Image & video reading — look at media in this message OR the message being replied to
@@ -5561,7 +5632,8 @@ async def _handle_message_pipeline(message):
                         user     = user or {}
                         mood     = user.get("mood", 0) if user else 0
                         system   = build_system(user, message.author.display_name,
-                                               bool(OWNER_ID and message.author.id == OWNER_ID))
+                                               bool(OWNER_ID and message.author.id == OWNER_ID),
+                                               allow_nsfw=_channel_allows_nsfw(message.channel, is_dm=not message.guild))
                         vision_content = []
                         for fb, mt in frames:
                             vision_content.append({
@@ -5624,7 +5696,8 @@ async def _handle_message_pipeline(message):
                     user     = user or {}
                     mood     = user.get("mood", 0) if user else 0
                     system   = build_system(user, message.author.display_name,
-                                           bool(OWNER_ID and message.author.id == OWNER_ID))
+                                           bool(OWNER_ID and message.author.id == OWNER_ID),
+                                           allow_nsfw=_channel_allows_nsfw(message.channel, is_dm=not message.guild))
                     if enroll_face_now:
                         if not face_support_ready():
                             await _guarded_message_reply(message, _face_feature_unavailable_text())
@@ -5846,7 +5919,7 @@ async def _handle_message_pipeline(message):
             if not current_input_focus and last_stmt and len(content)>20 and random.random()<.08:
                 parts.append(f'CONTRADICTION:"{last_stmt[:100]}"')
             if not current_input_focus and user and user.get("trust",0)>30 and random.random()<.06:
-                nice_msgs=[m for m in (await mem.get_recent_messages(message.author.id,10)) if any(k in m.lower() for k in NICE_KW)]
+                nice_msgs=[m for m in (await mem.get_recent_messages(message.author.id,10,guild_id=message.guild.id if message.guild else None)) if any(k in m.lower() for k in NICE_KW)]
                 if nice_msgs: parts.append(f'SELECTIVE:"{nice_msgs[0][:80]}"')
             if not current_input_focus and user and user.get("trust",0)>=70 and random.random()<.08:
                 parts.append("TRUST_OPEN"); await mem.update_trust(message.author.id,-3)
@@ -6033,7 +6106,12 @@ async def _handle_message_pipeline(message):
                     duo_mode=duo_mode,
                     jealousy_level=jealousy_level,
                 )
-            await _guarded_message_reply(message, strip_narration(resolve_mentions(reply, message.guild if message.guild else None)))
+            delivered = limit_user_mentions(resolve_mentions(strip_narration(reply), message.guild if message.guild else None))
+            pieces = chunk_text(delivered, MESSAGE_CHAR_LIMIT)
+            if pieces:
+                await _guarded_message_reply(message, pieces[0])
+                for piece in pieces[1:]:
+                    await _guarded_channel_send(message.channel, piece)
             await mem.add_message(message.author.id, dm_channel_id, "assistant", reply)
             await _maybe_schedule_private_confession_scene(message, user, content, is_dm=is_dm)
             await maybe_react(message, romance)
@@ -6183,7 +6261,7 @@ async def _voluntary_dm_loop():
                                         + "Write ONE short message — 1-2 sentences. Spontaneous. Just speak."
                                     )
                                     loop = asyncio.get_event_loop()
-                                    sys = build_system(ud, name)
+                                    sys = build_system(ud, name, allow_nsfw=True)  # a DM (still needs the 18+ confirmation)
                                     def _dm_ai():
                                         r = ai.call_with_retry(model=GROQ_MODEL,
                                             max_tokens=120,
@@ -6356,13 +6434,28 @@ async def owner_reply(ctx, text, *, embed=None):
             try: await ctx.reply(text)
             except: pass
 
+async def _visible_messages(ctx, user_id: int, limit: int) -> list[str]:
+    """Messages a command may quote or profile in front of the people who can see ``ctx``: in a server only what that
+    person said in this server (never their DMs with the bot or other servers); in a DM your own messages in full,
+    somebody else's only from server channels."""
+    if ctx.guild is not None:
+        return await mem.get_recent_messages(user_id, limit, guild_id=ctx.guild.id)
+    if user_id == ctx.author.id:
+        return await mem.get_recent_messages(user_id, limit)
+    return await mem.get_recent_messages(user_id, limit, public_only=True)
+
+
 async def safe_reply(ctx, text):
     text = _unwrap_dialogue_quotes(text)
     if not (text or "").strip():
         return
     if _is_banned_channel_target(ctx):
         return
-    try: await ctx.reply(text)
+    pieces = chunk_text(text, MESSAGE_CHAR_LIMIT)
+    try:
+        await ctx.reply(pieces[0])
+        for piece in pieces[1:]:
+            await ctx.send(piece)
     except Exception as e: log_error("safe_reply", e)
 
 async def safe_send(ctx, text):
@@ -6371,7 +6464,9 @@ async def safe_send(ctx, text):
         return
     if _is_banned_channel_target(ctx):
         return
-    try: await ctx.send(text)
+    try:
+        for piece in chunk_text(text, MESSAGE_CHAR_LIMIT):
+            await ctx.send(piece)
     except Exception as e: log_error("safe_send", e)
 
 
@@ -6519,10 +6614,55 @@ def _docfix_prompt(display_name: str, original_text: str, instructions: str = ""
     )
 
 
+# The rewrite replaces the whole document, so it must cover the whole document: longer ones are refused instead of
+# being cut short (the old code kept only what fit in the prompt and the reply, and deleted the rest).
+DOCFIX_MAX_CHARS = 6000
+DOCFIX_MAX_TOKENS = 2400
+
+
+def _docfix_too_long_message(length: int) -> str:
+    return (
+        f"That document is too long for me to rewrite safely ({length:,} characters; the limit is "
+        f"{DOCFIX_MAX_CHARS:,}). Send a shorter one or split it, and I'll leave the original untouched until then."
+    )
+
+
 async def _rewrite_google_doc_text(display_name: str, original_text: str, instructions: str = "") -> str:
-    revised = await qai(_docfix_prompt(display_name, original_text, instructions), 1800, self_edit=False, route="direct")
+    revised = await qai(_docfix_prompt(display_name, original_text, instructions), DOCFIX_MAX_TOKENS, self_edit=False, route="direct")
     cleaned = strip_narration(revised or "").strip()
     return cleaned if cleaned else original_text
+
+
+DOCFIX_CHALLENGE_SECONDS = 30 * 60
+DOCFIX_VERIFY_PREFIX = "scaramouche-verify:"
+_DOC_CHALLENGES: dict[tuple[int, str], tuple[str, float]] = {}
+
+
+def _docfix_challenge(user_id: int, doc_id: str, *, create: bool) -> str:
+    """The code ``user_id`` must type into ``doc_id`` to prove edit access ("" if none is pending and ``create`` is
+    False). The bot's Google account can edit any document shared with it, so without this anyone who saw a link
+    could have the bot rewrite somebody else's document."""
+    now = time.time()
+    for key, (_, expires) in list(_DOC_CHALLENGES.items()):
+        if expires <= now:
+            _DOC_CHALLENGES.pop(key, None)
+    pending = _DOC_CHALLENGES.get((user_id, doc_id))
+    if pending or not create:
+        return pending[0] if pending else ""
+    code = f"{DOCFIX_VERIFY_PREFIX}{secrets.token_hex(4)}"
+    _DOC_CHALLENGES[(user_id, doc_id)] = (code, now + DOCFIX_CHALLENGE_SECONDS)
+    return code
+
+
+def _remove_verify_marker(text: str, marker: str) -> str:
+    return "\n".join(line for line in (text or "").splitlines() if marker not in line)
+
+
+def _docfix_code_missing_message(marker: str) -> str:
+    return (
+        f"I don't see `{marker}` in that document yet. Type it anywhere in the doc, "
+        f"then send the same command again."
+    )
 
 
 async def _run_docfix_request(ctx, doc_and_instructions: str = ""):
@@ -6534,6 +6674,22 @@ async def _run_docfix_request(ctx, doc_and_instructions: str = ""):
             "Send a Google Docs link with the command. Example: `!fixdoc <google-doc-link> tighten the wording but keep the meaning`.",
         )
         return
+    doc_id = extract_google_doc_id(doc_link)
+    if not doc_id:
+        await safe_reply(ctx, "That isn't a Google Docs link I can read.")
+        return
+    marker = ""
+    if not _is_owner_ctx(ctx) and not await mem.is_doc_verified(doc_id, ctx.author.id):
+        marker = _docfix_challenge(ctx.author.id, doc_id, create=False)
+        if not marker:
+            marker = _docfix_challenge(ctx.author.id, doc_id, create=True)
+            await safe_reply(
+                ctx,
+                "First prove the document is yours. Type this code anywhere in the doc, then send the same "
+                f"command again within 30 minutes:\n`{marker}`\n"
+                "I delete the line with the code when I edit the doc.",
+            )
+            return
     ready, reason = google_docs_ready()
     share_email = service_account_email()
     await ctx.reply(
@@ -6547,19 +6703,49 @@ async def _run_docfix_request(ctx, doc_and_instructions: str = ""):
     )
     async with ctx.typing():
         if ready:
-            doc = await asyncio.get_event_loop().run_in_executor(None, lambda: fetch_google_doc(doc_link))
-            if not (doc.get("text") or "").strip():
+            doc = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: fetch_google_doc(doc_link, max_chars=0, without_suggestions=True),
+            )
+            text = doc.get("text") or ""
+            if not text.strip():
                 await safe_send(ctx, "The Google Doc is empty, or there was nothing readable in it.")
                 return
-            revised = await _rewrite_google_doc_text(ctx.author.display_name, doc["text"], instructions)
+            if marker:
+                if marker not in text:
+                    await safe_send(ctx, _docfix_code_missing_message(marker))
+                    return
+                text = _remove_verify_marker(text, marker)
+            if len(text) > DOCFIX_MAX_CHARS:
+                await safe_send(ctx, _docfix_too_long_message(len(text)))
+                return
+            revised = await _rewrite_google_doc_text(ctx.author.display_name, text, instructions)
             result = await asyncio.get_event_loop().run_in_executor(None, lambda: overwrite_google_doc(doc_link, revised))
+            verified = bool(marker)
         else:
-            result = await remote_fix_google_doc(
-                doc_link,
-                bot_name=BOT_NAME,
-                display_name=ctx.author.display_name,
-                instructions=instructions,
-            )
+            try:
+                result = await remote_fix_google_doc(
+                    doc_link,
+                    bot_name=BOT_NAME,
+                    display_name=ctx.author.display_name,
+                    instructions=instructions,
+                    verify_marker=marker,
+                )
+            except RuntimeError as exc:
+                if marker and "verification_code_missing" in str(exc):
+                    await safe_send(ctx, _docfix_code_missing_message(marker))
+                    return
+                too_long = re.search(r"document_too_long:(\d+)", str(exc))
+                if too_long:
+                    await safe_send(ctx, _docfix_too_long_message(int(too_long.group(1))))
+                    return
+                raise
+            # An outdated worker ignores the code and omits "verified": then nobody is recorded as verified.
+            verified = bool(marker and result.get("verified"))
+            if marker and not verified:
+                print("[DOCFIX] the render worker did not confirm the verification code; update video_render_worker.py")
+    if verified:
+        await mem.mark_doc_verified(doc_id, ctx.author.id)
+        _DOC_CHALLENGES.pop((ctx.author.id, doc_id), None)
     if ready:
         await safe_send(
             ctx,
@@ -6902,7 +7088,8 @@ async def voice_cmd(ctx,*,msg:str=None):
             return
         if not msg: msg="You summoned me without saying a word. How impressively useless."
         async with ctx.typing():
-            text_reply=await get_response(ctx.author.id,ctx.channel.id,msg,user,ctx.author.display_name,ctx.author.mention)
+            text_reply=await get_response(ctx.author.id,ctx.channel.id,msg,user,ctx.author.display_name,ctx.author.mention,
+                allow_nsfw=_channel_allows_nsfw(ctx.channel, is_dm=ctx.guild is None))
             sent=await send_voice(ctx.channel,text_reply,mood=mood_val,guild=ctx.guild,user=user,user_id=ctx.author.id)
         if sent:
             await mem.add_message(ctx.author.id, ctx.channel.id, "assistant", f"[voice message] {text_reply}")
@@ -8377,7 +8564,8 @@ async def spar_cmd(ctx,*,opening:str=None):
     try:
         user=await _setup(ctx)
         prompt=f"{ctx.author.display_name} challenged you: '{opening or 'Come on then.'}'. Fire back. End with a challenge."
-        reply=await get_response(ctx.author.id,ctx.channel.id,prompt,user,ctx.author.display_name,ctx.author.mention)
+        reply=await get_response(ctx.author.id,ctx.channel.id,prompt,user,ctx.author.display_name,ctx.author.mention,
+                allow_nsfw=_channel_allows_nsfw(ctx.channel, is_dm=ctx.guild is None))
         await safe_reply(ctx,reply)
     except Exception as e: log_error("spar_cmd",e)
 
@@ -8385,8 +8573,8 @@ async def spar_cmd(ctx,*,opening:str=None):
 async def duel_cmd(ctx,member:discord.Member=None):
     try:
         if not member or member==ctx.author: await safe_reply(ctx,"Duel *who*?"); return
-        u1=" | ".join((await mem.get_recent_messages(ctx.author.id,3))[:3])[:150]
-        u2=" | ".join((await mem.get_recent_messages(member.id,3))[:3])[:150]
+        u1=" | ".join((await _visible_messages(ctx, ctx.author.id, 3))[:3])[:150]
+        u2=" | ".join((await _visible_messages(ctx, member.id, 3))[:3])[:150]
         reply=await qai(f"Referee insult duel: {ctx.author.display_name} (says:'{u1}') vs {member.display_name} (says:'{u2}'). Analyze both, declare winner. 3-4 sentences.",300)
         await ctx.send(f"{ctx.author.mention} vs {member.mention}\n{reply}")
     except Exception as e: log_error("duel_cmd",e)
@@ -8395,7 +8583,7 @@ async def duel_cmd(ctx,member:discord.Member=None):
 async def judge_cmd(ctx,member:discord.Member=None):
     try:
         target=member or ctx.author
-        sample=" | ".join(await mem.get_recent_messages(target.id,8))[:400]
+        sample=" | ".join(await _visible_messages(ctx, target.id, 8))[:400]
         reply=await qai(f"Brutal assessment of {target.display_name}"+(f" — words:'{sample}'" if sample else "")+". 2-4 sentences.",250)
         if member: await ctx.send(f"{member.mention} {reply}")
         else: await safe_reply(ctx,reply)
@@ -8432,7 +8620,8 @@ async def confess_cmd(ctx,*,confession:str=None):
     try:
         if not confession: await safe_reply(ctx,"Confess *what*?"); return
         user=await _setup(ctx)
-        reply=await get_response(ctx.author.id,ctx.channel.id,f"I have something to confess: {confession}",user,ctx.author.display_name,ctx.author.mention)
+        reply=await get_response(ctx.author.id,ctx.channel.id,f"I have something to confess: {confession}",user,ctx.author.display_name,ctx.author.mention,
+                allow_nsfw=_channel_allows_nsfw(ctx.channel, is_dm=ctx.guild is None))
         await safe_reply(ctx,reply)
     except Exception as e: log_error("confess_cmd",e)
 
@@ -8464,7 +8653,7 @@ async def story_cmd(ctx,*,prompt:str=None):
 async def stalk_cmd(ctx,member:discord.Member=None):
     try:
         target=member or ctx.author
-        sample=" | ".join(await mem.get_recent_messages(target.id,10))[:500]
+        sample=" | ".join(await _visible_messages(ctx, target.id, 10))[:500]
         reply=await qai(f"Cold observation report on {target.display_name}"+(f" — statements:'{sample}'" if sample else "")+". 3-4 sentences.",280)
         if member: await ctx.send(f"*Regarding {member.mention}...*\n{reply}")
         else: await safe_reply(ctx,reply)
@@ -8491,7 +8680,8 @@ async def therapy_cmd(ctx,*,problem:str=None):
     try:
         if not problem: await safe_reply(ctx,"What's your problem."); return
         user=await _setup(ctx)
-        reply=await get_response(ctx.author.id,ctx.channel.id,f"I need advice about: {problem}",user,ctx.author.display_name,ctx.author.mention)
+        reply=await get_response(ctx.author.id,ctx.channel.id,f"I need advice about: {problem}",user,ctx.author.display_name,ctx.author.mention,
+                allow_nsfw=_channel_allows_nsfw(ctx.channel, is_dm=ctx.guild is None))
         await safe_reply(ctx,reply)
     except Exception as e: log_error("therapy_cmd",e)
 
@@ -8499,7 +8689,7 @@ async def therapy_cmd(ctx,*,problem:str=None):
 async def blackmail_cmd(ctx,member:discord.Member=None):
     try:
         target=member or ctx.author
-        sample=" | ".join(await mem.get_recent_messages(target.id,15))[:600]
+        sample=" | ".join(await _visible_messages(ctx, target.id, 15))[:600]
         reply=await qai(f"Find the most 'incriminating' thing in {target.display_name}'s messages: '{sample}' and theatrically threaten to use it. 2-3 sentences.",250)
         if member: await ctx.send(f"{member.mention} {reply}")
         else: await safe_reply(ctx,reply)
@@ -8524,7 +8714,7 @@ async def arena_cmd(ctx,member:discord.Member=None):
 async def possess_cmd(ctx,member:discord.Member=None):
     try:
         if not member: await safe_reply(ctx,"Possess *who*?"); return
-        sample=" | ".join(await mem.get_recent_messages(member.id,10))[:400]
+        sample=" | ".join(await _visible_messages(ctx, member.id, 10))[:400]
         reply=await qai(f"Speak as {member.display_name} but filtered through you. Their statements: '{sample}'. 2-3 sentences.",250)
         await ctx.send(f"*Speaking as {member.mention}...*\n{reply}")
     except Exception as e: log_error("possess_cmd",e)
@@ -8550,6 +8740,7 @@ async def verdict_cmd(ctx,*,situation:str=None):
                 ctx.author.mention,
                 extra_context="DUAL_VERDICT_REQUEST: give your judgment, knowing the other bot will answer with a contrasting standard.",
                 channel_obj=ctx.channel,
+                allow_nsfw=_channel_allows_nsfw(ctx.channel, is_dm=ctx.guild is None),
             )
         else:
             reply=await qai(f"Rule on: '{situation}' like a cold judge. Finality. 2-3 sentences.",200)
@@ -8576,9 +8767,16 @@ async def nightmare_cmd(ctx):
 @bot.command(name="rank")
 async def rank_cmd(ctx):
     try:
-        top=await mem.get_top_users(8)
+        if ctx.guild is None:
+            await safe_reply(ctx,"A ranking needs an audience. Ask me in a server."); return
+        top=[]
+        for row in await mem.get_top_users_in_guild(ctx.guild.id, 60):
+            member=ctx.guild.get_member(row["user_id"])
+            if member is not None and not member.bot:
+                top.append({"display_name": member.display_name, "message_count": row["message_count"]})
+            if len(top)==8: break
         if not top: await safe_reply(ctx,"I don't know enough of you to rank."); return
-        entries="\n".join(f"{i+1}. **{u['display_name']}** — {u['message_count']} messages" for i,u in enumerate(top))
+        entries="\n".join(f"{i+1}. **{discord.utils.escape_markdown(u['display_name'])}** — {u['message_count']} messages" for i,u in enumerate(top))
         verdict=await qai(f"Rank these by tolerability: {', '.join(u['display_name'] for u in top)}. Dismissive commentary. 2 sentences.",150)
         embed=discord.Embed(title="Tolerability Ranking",description=f"{entries}\n\n*{verdict}*",color=0x4B0082)
         await ctx.send(embed=embed)
@@ -8713,7 +8911,8 @@ async def lore_cmd(ctx,*,topic:str=None):
     try:
         if not topic: await safe_reply(ctx,"Lore about *what*?"); return
         user=await _setup(ctx)
-        reply=await get_response(ctx.author.id,ctx.channel.id,f"Tell me about this Genshin lore from your perspective: {topic}",user,ctx.author.display_name,ctx.author.mention)
+        reply=await get_response(ctx.author.id,ctx.channel.id,f"Tell me about this Genshin lore from your perspective: {topic}",user,ctx.author.display_name,ctx.author.mention,
+                allow_nsfw=_channel_allows_nsfw(ctx.channel, is_dm=ctx.guild is None))
         await safe_reply(ctx,reply)
     except Exception as e: log_error("lore_cmd",e)
 
@@ -8759,7 +8958,8 @@ async def translate_cmd(ctx,*,text:str=None):
     try:
         if not text: await safe_reply(ctx,"Translate *what*?"); return
         user=await _setup(ctx)
-        reply=await get_response(ctx.author.id,ctx.channel.id,f"Rewrite this in your voice, keeping the meaning: '{text[:500]}'",user,ctx.author.display_name,ctx.author.mention)
+        reply=await get_response(ctx.author.id,ctx.channel.id,f"Rewrite this in your voice, keeping the meaning: '{text[:500]}'",user,ctx.author.display_name,ctx.author.mention,
+                allow_nsfw=_channel_allows_nsfw(ctx.channel, is_dm=ctx.guild is None))
         await safe_reply(ctx,reply)
     except Exception as e: log_error("translate_cmd",e)
 
@@ -8823,7 +9023,17 @@ async def memories_cmd(ctx):
         topics=await mem.get_top_topics(ctx.author.id,4)
         memories=await mem.get_memory_bank_entries(ctx.author.id,6)
         scene=await mem.get_scene_state(ctx.channel.id)
-        await safe_reply(ctx,_format_memory_snapshot(user,topics,memories,scene))
+        snapshot=_format_memory_snapshot(user,topics,memories,scene)
+        if ctx.guild is None:
+            await safe_reply(ctx,snapshot)
+            return
+        # Memories can come from DMs, so in a server they are delivered privately instead of to the whole channel.
+        try:
+            for piece in chunk_text(snapshot, MESSAGE_CHAR_LIMIT):
+                await ctx.author.send(piece, allowed_mentions=discord.AllowedMentions.none())
+            await safe_reply(ctx,"I sent what I remember about you to your DMs. Some of it is not for an audience.")
+        except discord.Forbidden:
+            await safe_reply(ctx,"Your DMs are closed, and what I remember about you is not for an audience. Open them and ask again.")
     except Exception as e: log_error("memories_cmd",e)
 
 @bot.command(name="pinpromise")
@@ -9304,6 +9514,12 @@ async def nsfw_cmd(ctx,mode:str=None):
     try:
         user=await _setup(ctx); cur=user.get("nsfw_mode",False) if user else False
         new=True if mode=="on" else False if mode=="off" else not cur
+        if new and not _channel_allows_nsfw(ctx.channel, is_dm=ctx.guild is None):
+            await safe_reply(ctx,"Unfiltered mode only works in DMs and age-restricted channels."); return
+        if new and not (user or {}).get("adult_confirmed"):
+            await ctx.reply("Unfiltered mode is for adults only. Confirm that you are 18 or older to turn it on.",
+                            view=AdultConfirmView(ctx.author.id))
+            return
         await mem.set_mode(ctx.author.id,"nsfw_mode",new)
         await safe_reply(ctx,"Unfiltered. Fine." if new else "Restrained again. How boring.")
     except Exception as e: log_error("nsfw_cmd",e)

@@ -50,7 +50,7 @@
   <div class="container">
     <div class="header">
       <h1>Privacy Policy</h1>
-      <p>Scaramouche Bot &mdash; Last updated: 2025</p>
+      <p>Scaramouche Bot &mdash; Last updated: November 2026</p>
     </div>
 
     <h2>1. Overview</h2>
@@ -61,10 +61,15 @@
     <ul>
       <li><strong>Discord User ID</strong> — to identify you across conversations</li>
       <li><strong>Discord Username &amp; Display Name</strong> — to address you correctly</li>
-      <li><strong>Message Content</strong> — your messages to the Bot, stored as conversation history to enable memory features</li>
-      <li><strong>User Preferences</strong> — mode settings such as NSFW mode, romance mode, and proactive messaging toggles</li>
-      <li><strong>Channel &amp; Server IDs</strong> — to track which channels are active for proactive messaging</li>
+      <li><strong>Message Content</strong> — your messages to the Bot, in servers and in DMs, stored as conversation history to enable memory features</li>
+      <li><strong>Memories derived from your messages</strong> — topics you often mention, saved moments ("memory bank"), inside jokes and a short relationship summary</li>
+      <li><strong>User Preferences</strong> — mode settings such as unfiltered mode, romance mode and proactive messaging toggles, your time zone, quiet hours and (if you set it with <strong>!birthday</strong>) your birthday</li>
+      <li><strong>Age confirmation</strong> — whether you confirmed you are 18 or older, which unfiltered mode requires</li>
+      <li><strong>Google Docs you edit with the Bot</strong> — the document ID and the time you proved you can edit it, when you use <strong>!fixdoc</strong></li>
+      <li><strong>Reminders</strong> you ask the Bot to keep</li>
+      <li><strong>Channel &amp; Server IDs</strong> — to track which channels are active for proactive messaging and to keep each server's conversations apart</li>
     </ul>
+    <p>What you say in DMs stays out of server channels: commands that quote or profile someone (for example <strong>!stalk</strong>, <strong>!judge</strong> or <strong>!blackmail</strong>) only use what that person said in the same server, server rankings only count that server's messages, and <strong>!memories</strong> used in a server is answered by DM.</p>
 
     <h2>3. How We Use Your Data</h2>
     <p>Collected data is used exclusively to:</p>
@@ -72,15 +77,20 @@
       <li>Provide conversation memory so the Bot remembers past interactions</li>
       <li>Store your personal preferences and mode settings</li>
       <li>Enable proactive messaging features (if opted in)</li>
+      <li>Answer with real support resources, instead of the character, when a message suggests you may hurt yourself</li>
     </ul>
     <p>Your data is never sold, shared with third parties, or used for advertising.</p>
 
     <h2>4. Third-Party Services</h2>
     <p>The Bot uses the following third-party APIs to function. Your messages may be processed by these services:</p>
     <ul>
-      <li><strong>Anthropic (Claude API)</strong> — processes your messages to generate responses. See <a href="https://www.anthropic.com/privacy" target="_blank">Anthropic's Privacy Policy</a>.</li>
-      <li><strong>Fish Audio</strong> — processes text to generate voice responses. See <a href="https://fish.audio/privacy/" target="_blank">Fish Audio's Privacy Policy</a>.</li>
+      <li><strong>Groq</strong> — processes your messages, and images or video frames you share with the Bot, to generate responses. See <a href="https://groq.com/privacy-policy/" target="_blank">Groq's Privacy Policy</a>.</li>
+      <li><strong>xAI</strong> — may analyse images you share with the Bot, when the owner has enabled it. See <a href="https://x.ai/legal/privacy-policy" target="_blank">xAI's Privacy Policy</a>.</li>
+      <li><strong>Fish Audio</strong> — processes text to generate voice responses (Google Text-to-Speech is used as a fallback). See <a href="https://fish.audio/privacy/" target="_blank">Fish Audio's Privacy Policy</a>.</li>
+      <li><strong>DuckDuckGo</strong> — receives search queries when the Bot looks something up for you; links you post may be opened to read a preview.</li>
+      <li><strong>Google Docs</strong> — documents you ask the Bot to edit with <strong>!fixdoc</strong> are read and rewritten through Google's API. See <a href="https://policies.google.com/privacy" target="_blank">Google's Privacy Policy</a>.</li>
     </ul>
+    <p>Face recognition is only ever used for the Bot owner's own face, at the owner's request.</p>
 
     <h2>5. Data Storage</h2>
     <p>Data is stored in a local SQLite database on the server hosting the Bot. It is not stored in any external database or cloud storage service beyond the hosting platform (Railway).</p>

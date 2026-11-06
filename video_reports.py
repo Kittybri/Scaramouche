@@ -368,7 +368,9 @@ async def render_duo_debate_video(notes_text: str, *, title: str = "") -> dict:
     return await _run_render_script(DUO_VIDEO_SCRIPT, notes_text, title=title)
 
 
-async def remote_fix_google_doc(doc_url: str, *, bot_name: str, display_name: str, instructions: str = "") -> dict:
+async def remote_fix_google_doc(
+    doc_url: str, *, bot_name: str, display_name: str, instructions: str = "", verify_marker: str = "",
+) -> dict:
     if not _remote_requested():
         raise RuntimeError("Remote worker mode is not enabled for document editing.")
     base_urls = _remote_base_urls()
@@ -383,6 +385,8 @@ async def remote_fix_google_doc(doc_url: str, *, bot_name: str, display_name: st
         "display_name": display_name,
         "instructions": instructions or "",
     }
+    if verify_marker:
+        payload["verify_marker"] = verify_marker  # the worker refuses the rewrite unless the code is in the document
     timeout = aiohttp.ClientTimeout(total=VIDEO_RENDER_REMOTE_TIMEOUT_S)
     for index, base_url in enumerate(base_urls, start=1):
         try:

@@ -90,13 +90,17 @@ def _read_structural_elements(elements: list[dict[str, Any]], pieces: list[str])
             _read_structural_elements(toc.get("content", []), pieces)
 
 
-def fetch_google_doc(url_or_id: str, *, max_chars: int = 12000) -> dict[str, Any]:
+def fetch_google_doc(url_or_id: str, *, max_chars: int = 12000, without_suggestions: bool = False) -> dict[str, Any]:
+    """``max_chars=0`` reads the whole document. ``without_suggestions`` reads it as if every pending suggestion were
+    rejected: an editor account otherwise gets suggestions inline, so text a commenter merely proposed would count as
+    part of the document."""
     doc_id = extract_google_doc_id(url_or_id)
     if not doc_id:
         raise ValueError("That is not a valid Google Docs link or document id.")
     service = _docs_service()
+    options = {"suggestionsViewMode": "PREVIEW_WITHOUT_SUGGESTIONS"} if without_suggestions else {}
     try:
-        doc = service.documents().get(documentId=doc_id).execute()
+        doc = service.documents().get(documentId=doc_id, **options).execute()
     except Exception as exc:
         email = service_account_email()
         if email:

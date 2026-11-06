@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import aiosqlite
 import asyncio
+import random  # mood swings used to rely on bot.py patching this module (memory.random = random)
 import time
 import json
 import os
@@ -204,6 +205,12 @@ class Memory:
                     channel_id  INTEGER PRIMARY KEY,
                     guild_id    INTEGER,
                     last_active REAL
+                );
+                CREATE TABLE IF NOT EXISTS doc_verifications (
+                    doc_id      TEXT NOT NULL,
+                    user_id     INTEGER NOT NULL,
+                    verified_at REAL DEFAULT 0,
+                    PRIMARY KEY (doc_id, user_id)
                 );
                 CREATE TABLE IF NOT EXISTS proactive_cooldown (
                     channel_id  INTEGER PRIMARY KEY,
@@ -438,6 +445,7 @@ class Memory:
                 ("birth_day",          "INTEGER DEFAULT 0"),
                 ("birth_year",         "INTEGER DEFAULT 0"),
                 ("birthday_last_sent_year", "INTEGER DEFAULT 0"),
+                ("adult_confirmed",    "INTEGER DEFAULT 0"),  # 18+ confirmation required for !nsfw
             ]
             for col, default in migrations:
                 try:
@@ -681,7 +689,8 @@ class Memory:
                        milestone_last,first_seen,last_seen,last_active,greeted_today,anniversary_last,
                        slow_burn,slow_burn_fired,drift_score,memory_summary,last_statement,
                        style_profile,emotional_arc,conflict_open,conflict_summary,last_conflict_ts,repair_progress,
-                       callback_memory,callback_ts,repair_count,birth_month,birth_day,birth_year,birthday_last_sent_year
+                       callback_memory,callback_ts,repair_count,birth_month,birth_day,birth_year,birthday_last_sent_year,
+                       adult_confirmed
                 FROM users WHERE user_id=?
             """, (user_id,)) as cur:
                 row = await cur.fetchone()
@@ -724,6 +733,7 @@ class Memory:
                     "birth_day": row[47] or 0,
                     "birth_year": row[48] or 0,
                     "birthday_last_sent_year": row[49] or 0,
+                    "adult_confirmed": bool(row[50]),
                 }
         prefs = await self.get_user_preferences(user_id)
         user.update(prefs)
@@ -990,7 +1000,7 @@ class Memory:
         }
 
     async def set_mode(self, user_id: int, field: str, value: bool):
-        allowed = {"nsfw_mode","romance_mode","proactive","allow_dms"}
+        allowed = {"nsfw_mode","romance_mode","proactive","allow_dms","adult_confirmed"}
         if field not in allowed: raise ValueError(f"Unknown: {field}")
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute(f"UPDATE users SET {field}=? WHERE user_id=?", (int(value), user_id))
@@ -2559,6 +2569,19 @@ class Memory:
             "milestone_last": recovered_milestone,
         }
 
+    async def get_top_users_in_guild(self, guild_id: int, limit: int = 60) -> list[dict]:
+        """Who talks to the bot most in one server, counted from that server's own messages (never DMs or other
+        servers), so a ranking cannot list people from elsewhere or reveal their activity there."""
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                "SELECT m.user_id, COUNT(*) AS n FROM messages m JOIN channels c ON c.channel_id=m.channel_id "
+                "WHERE c.guild_id=? AND m.role='user' AND m.user_id>0 AND (m.bot_name=? OR m.bot_name IS NULL) "
+                "GROUP BY m.user_id ORDER BY n DESC, m.user_id LIMIT ?",
+                (guild_id, self.bot_name, limit),
+            ) as cur:
+                rows = await cur.fetchall()
+        return [{"user_id": r[0], "message_count": r[1]} for r in rows]
+
     async def get_top_users(self, limit: int = 8) -> list[dict]:
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute(
@@ -2655,10 +2678,48 @@ class Memory:
             async with db.execute("SELECT content FROM messages WHERE user_id=? AND role='user' AND (bot_name=? OR bot_name IS NULL) AND ts<? ORDER BY RANDOM() LIMIT 1", (user_id,self.bot_name,cutoff)) as cur:
                 row = await cur.fetchone(); return row[0] if row else None
 
-    async def get_recent_messages(self, user_id: int, limit: int = 10) -> list[str]:
+    async def get_recent_messages(
+        self, user_id: int, limit: int = 10, *, guild_id: int | None = None, public_only: bool = False,
+    ) -> list[str]:
+        """A user's recent messages. ``guild_id`` limits them to that server's channels and ``public_only`` to any
+        server channel; either way DMs (and, with ``guild_id``, other servers) are left out. Use one of them whenever
+        the result can end up in front of other people."""
+        join, extra, params = "", "", [user_id, self.bot_name]
+        if guild_id is not None or public_only:
+            join = " JOIN channels c ON c.channel_id=m.channel_id"
+            if guild_id is not None:
+                extra = " AND c.guild_id=?"
+                params.append(guild_id)
+            else:
+                extra = " AND c.guild_id IS NOT NULL"  # only server channels are tracked; never count on that alone
+        params.append(limit)
         async with aiosqlite.connect(DB_PATH) as db:
-            async with db.execute("SELECT content FROM messages WHERE user_id=? AND role='user' AND (bot_name=? OR bot_name IS NULL) ORDER BY ts DESC LIMIT ?", (user_id,self.bot_name,limit)) as cur:
+            async with db.execute(
+                f"SELECT m.content FROM messages m{join} WHERE m.user_id=? AND m.role='user' "
+                f"AND (m.bot_name=? OR m.bot_name IS NULL){extra} ORDER BY m.ts DESC LIMIT ?",
+                params,
+            ) as cur:
                 return [r[0] for r in await cur.fetchall()]
+
+    # ── Google Doc edit access (who proved they can edit a document) ─────────
+    DOC_VERIFY_TTL_SECONDS = 30 * 86400  # re-prove after a month: edit access can be taken away
+
+    async def is_doc_verified(self, doc_id: str, user_id: int) -> bool:
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                "SELECT verified_at FROM doc_verifications WHERE doc_id=? AND user_id=?", (doc_id, user_id),
+            ) as cur:
+                row = await cur.fetchone()
+        return bool(row and time.time() - float(row[0] or 0) < self.DOC_VERIFY_TTL_SECONDS)
+
+    async def mark_doc_verified(self, doc_id: str, user_id: int):
+        """Record that ``user_id`` proved edit access to ``doc_id`` (several editors of one document may each do so)."""
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "INSERT OR REPLACE INTO doc_verifications (doc_id,user_id,verified_at) VALUES (?,?,?)",
+                (doc_id, user_id, time.time()),
+            )
+            await db.commit()
 
     async def get_channel_recent(self, channel_id: int, limit: int = 20) -> list[dict]:
         """Get recent messages from all users in a channel."""
