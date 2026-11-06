@@ -162,18 +162,6 @@ def choose_duo_advice_mode(text: str, roll: float, *, safety=None) -> str:
     return ""
 
 
-def protective_prompt(bot_name: str, safety: SafetyContext) -> str:
-    if not safety.protective:
-        return ""
-    identity = "Scaramouche" if bot_name.lower() == "scaramouche" else "Wanderer"
-    return (
-        f"PROTECTIVE_OVERRIDE: {identity} recognizes genuine distress before replying. "
-        "Be calm, useful, and present. Do not diagnose, mock, threaten, moralize, or use sarcasm. "
-        "For immediate danger, encourage appropriate real-world emergency help. Stay in character "
-        "through restrained concern, not cruelty."
-    )
-
-
 def playful_negative_target(text: str, bot_names: Mapping[str, Iterable[str]]) -> str:
     """Return the discussed bot only for a clearly playful public jab."""
     lowered = (text or "").lower()

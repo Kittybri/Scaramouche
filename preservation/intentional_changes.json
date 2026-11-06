@@ -54,5 +54,13 @@
     "replacement": "Scaramouche already had /world state and /world add. Add /world prefs and /weatherlocation; preserve the old prefix commands and alias as callable compatibility paths.",
     "privacy_impact": "Weather location and world preferences use private slash responses. Prefix behavior, user ownership, and deletion boundaries remain intact.",
     "validation": "Slash registration and behavior tests, runtime preservation manifest and diff checks, full suites, and live staging slash-registration inspection."
+  },
+  {
+    "authorization": "Current owner request (November 2026): \"He is not a helping bot. This is not the bot's responsibility, I don't want him to be a psychologist.\" followed by \"remove them\" for the protective-mode items, the reply rate limit and the two-ping cap.",
+    "removed_surfaces": ["behavior:protective_override_prompt", "behavior:unprompted_protective_reply", "behavior:chat_reply_rate_limit", "behavior:two_user_mention_cap"],
+    "reason": "The owner does not want the character to act as a helper. PROTECTIVE_OVERRIDE (calm, useful, no sarcasm, point to emergency help) is no longer added to text, policy or live voice prompts, and messages not aimed at him never get a protective reply. The per-person reply limit and the two-mention cap were audit additions the owner did not want.",
+    "replacement": "None. Messages aimed at him that read as distress still bypass game sessions as before and get an ordinary in-character reply. Duo advice 'protective' mode, the 'protective concern' voice tone, gag pausing and the sensitive-memory filter are unchanged. @everyone, @here and role pings stay blocked.",
+    "privacy_impact": "None: no data is collected, kept or shown differently.",
+    "validation": "Updated regression tests (no PROTECTIVE_OVERRIDE in text, policy and voice prompts; no unprompted replies), preservation and Tarot suites, full offline suite."
   }
 ]

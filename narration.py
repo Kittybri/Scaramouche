@@ -62,7 +62,6 @@ _SPEECH_TAG_RE = re.compile(
     r"|(?:scaramouche|the\s+balladeer|wanderer)\s+(?:said|replied|answered|retorted))\b[,.:]?\s*",
     re.IGNORECASE | re.MULTILINE,
 )
-_USER_MENTION_RE = re.compile(r"<@!?\d+>")
 _ANY_MENTION_RE = re.compile(r"<@!?\d+>|<#\d+>|<@&\d+>")
 _ROLE_MENTION_RE = re.compile(r"<@&\d+>")
 # First '@' of a run, possessive: linear on "@@@@..." and no word boundary (Discord pings "@herewhat" too).
@@ -155,18 +154,6 @@ def strip_narration(text: str | None, *, strip_mentions: bool = True, keep_if_em
         if len(fallback) >= len(cleaned):
             cleaned = fallback
     return cleaned
-
-
-def limit_user_mentions(text: str | None, max_mentions: int = 2) -> str:
-    """Keep the first ``max_mentions`` user mentions; later ones become plain spaces (no mass pinging)."""
-    kept = 0
-
-    def _one(match: re.Match[str]) -> str:
-        nonlocal kept
-        kept += 1
-        return match.group(0) if kept <= max_mentions else " "
-
-    return _tidy(_USER_MENTION_RE.sub(_one, text or ""))
 
 
 def chunk_text(text: str | None, limit: int = 1900) -> list[str]:

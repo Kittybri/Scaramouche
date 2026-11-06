@@ -403,6 +403,10 @@ def test_unrestricted_prompt_requires_an_allowed_channel(monkeypatch):
     user = {"unrestricted_mode": True, "romance_mode": False, "adult_confirmed": True}
     assert "## Unrestricted Mode" not in runtime.build_system(user)
     assert "## Unrestricted Mode" in runtime.build_system(user, allow_unrestricted=True)
+    assert "Swear freely and naturally" in runtime.build_system(user, allow_unrestricted=True)
+    romance = {**user, "romance_mode": True}
+    assert "## Unrestricted Romance — Kai" in runtime.build_system(romance, "Kai", allow_unrestricted=True)
+    assert "Unrestricted" not in runtime.build_system(romance, "Kai")
     unconfirmed = {"unrestricted_mode": True, "romance_mode": False}
     assert "## Unrestricted Mode" not in runtime.build_system(unconfirmed, allow_unrestricted=True)
     discord_age_flag = "is_" + "ns" + "fw"
@@ -549,7 +553,7 @@ def test_normal_generation_path_uses_bounded_persistent_context(monkeypatch, tmp
         message["content"] for message in captured[-1]["messages"]
     )
     assert serious_rendered.count("RESOLVED_CHARACTER_STATE:") == 1
-    assert "PROTECTIVE_OVERRIDE: Scaramouche" in serious_rendered
+    assert "PROTECTIVE_OVERRIDE" not in serious_rendered  # removed at the owner's request
     assert "ACCURACY_FIRST:" in serious_rendered
     assert "GRUDGE:pest" not in serious_rendered
     memory.update_mood.assert_not_awaited()

@@ -225,7 +225,7 @@ def test_start_callbacks_and_automatic_membership_shutdown(monkeypatch):
         )
         assert reply == "Dialogue."
         extra = service.respond.call_args.kwargs["extra_context"]
-        assert "PROTECTIVE_OVERRIDE" in extra
+        assert "PROTECTIVE_OVERRIDE" not in extra  # removed at the owner's request
         await session.synthesize(1, "Dialogue.")
         assert service.tts.call_args.kwargs["voice_key"] == 1
         await session.remember(1, "Spoken part")

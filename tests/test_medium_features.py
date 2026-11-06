@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 
 from awareness_features import (
     activity_snapshot, choose_duo_advice_mode, classify_safety,
-    playful_negative_target, protective_prompt, resolve_voice_state,
+    playful_negative_target, resolve_voice_state,
     select_relevant_recall, style_voice_text,
 )
 from integrations import (
@@ -36,7 +36,6 @@ class AwarenessFeatureTests(unittest.TestCase):
         self.assertEqual(choose_duo_advice_mode("I cannot breathe, call 911", 0.01), "protective")
         safety = classify_safety("I'm overwhelmed and having an awful day")
         self.assertTrue(safety.protective)
-        self.assertIn("Do not diagnose", protective_prompt("scaramouche", safety))
         self.assertFalse(classify_safety("Scaramouche is annoyingly dramatic").protective)
 
     def test_tattletale_requires_a_real_playful_target(self):

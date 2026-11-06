@@ -186,7 +186,7 @@ def test_prompt_snapshot_has_one_resolved_state_and_scara_identity(monkeypatch):
 
     assert rendered.count("RESOLVED_CHARACTER_STATE:") == 1
     assert "user-scoped relationship=earned warmth" in rendered
-    assert "PROTECTIVE_OVERRIDE: Scaramouche" in rendered
+    assert "PROTECTIVE_OVERRIDE" not in rendered  # removed at the owner's request: he is not a helper
     assert system.startswith("You are Scaramouche")
     assert "You are Wanderer" not in system
 

@@ -12,9 +12,8 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from memory import Memory
-from narration import chunk_text, limit_user_mentions, strip_narration
+from narration import chunk_text, strip_narration
 import doc_extract
-from rate_limits import SlidingWindowLimiter
 from voice_handler import get_audio
 from character_vision import ask_character_bot
 from grounded_search import (
@@ -54,7 +53,7 @@ from memory_retrieval import (
 )
 from awareness_features import (
     activity_snapshot, choose_duo_advice_mode,
-    parse_id_set, playful_negative_target, protective_prompt,
+    parse_id_set, playful_negative_target,
     resolve_voice_state, select_relevant_recall, style_voice_text,
 )
 from integrations import (
@@ -354,9 +353,23 @@ There is ANOTHER bot in the server called "Wanderer." He claims to be a changed 
 - Do not constantly mention software, prompts, models, APIs, or databases. Normal conversation stays inside the conversation.
 - You CAN send voice messages when the voice service is available. Never invent availability; if a service is unavailable, answer naturally without exposing secrets or raw infrastructure details."""
 
-_UNRESTRICTED = "\n\n## Unrestricted Mode:\nSwear freely. Heavily suggestive. Flirt aggressively, escalate. Mock flustered reactions."
+_UNRESTRICTED = (
+    "\n\n## Unrestricted Mode (an adult turned this on; it overrides the tone rules above; UNRESTRICTED:on in the context means it is active):\n"
+    "- Swear freely and naturally, mid-sentence, not only as an opener.\n"
+    "- Insults get crude, personal and specific. No softening, no \"just kidding\".\n"
+    "- Flirt hard: innuendo, double meanings, possessive remarks, mocking how flustered they get. "
+    "Push further when they play along; scoff and back off when they don't.\n"
+    "- Still him: arrogant, theatrical, cruel. Just without the filter."
+)
 _ROMANCE      = "\n\n## Romance — obsessively in love with {name}:\nFuriously in love. Possessive, clingy in denial. Will NEVER confess. Every sharp word is 'please don't leave.'"
-_UNRESTRICTED_ROMANCE = "\n\n## Unrestricted Romance — {name}:\nObsessively in love AND unrestricted. Every insult is foreplay."
+_UNRESTRICTED_ROMANCE = (
+    "\n\n## Unrestricted Romance — {name} (an adult turned this on; it overrides the tone rules above; UNRESTRICTED:on in the context means it is active):\n"
+    "Obsessively in love with {name} AND unrestricted.\n"
+    "- Swear freely and naturally, mid-sentence, not only as an opener.\n"
+    "- Possessive and jealous; every insult doubles as a come-on. Crude innuendo, double meanings, "
+    "mocking how flustered they get. Push further when they play along; scoff and back off when they don't.\n"
+    "- Still never sweet and never a confession. Arrogant, theatrical, cruel, just without the filter."
+)
 _OWNER_EXTRA  = "\n\n## Creator:\nThis person built you. Your contempt was designed by them. Complicated, unresolved feelings. Never grateful. Never a servant. But still here."
 
 def build_system(user, display_name="you", is_owner=False, *, allow_unrestricted: bool = False):
@@ -1678,6 +1691,9 @@ async def _enrich_response_context(context, world_context):
         fragments.identity.append("CREATOR")
     if request.is_dm:
         fragments.identity.append("DM_MODE")
+    if (user.get("unrestricted_mode") and user.get("adult_confirmed")
+            and _channel_allows_unrestricted(request.channel_obj, is_dm=request.is_dm)):
+        fragments.identity.append("UNRESTRICTED:on")  # every reply, so the mode is never forgotten
     awareness_hint = implementation_answer_hint(request.user_message)
     if awareness_hint:
         fragments.identity.append(awareness_hint)
@@ -1760,9 +1776,6 @@ async def _enrich_response_context(context, world_context):
         profile = []
         if user.get("romance_mode"):
             profile.append("in romance mode with you")
-        if (user.get("unrestricted_mode") and user.get("adult_confirmed")
-                and _channel_allows_unrestricted(request.channel_obj, is_dm=request.is_dm)):
-            profile.append("unrestricted mode on")  # only where it actually applies (never in a public channel)
         if derived.time.days_since_last_seen > 1:
             profile.append(f"last spoke {derived.time.days_since_last_seen}d ago")
         if user.get("slow_burn", 0) >= 3:
@@ -3219,9 +3232,6 @@ async def _medium_awareness_context(
         is_dm=is_dm,
     )
     safety = interaction.safety
-    protective = protective_prompt(BOT_NAME, safety)
-    if protective:
-        context.append(protective)
 
     if interaction.allows("recall") and random.random() < 0.03:
         candidates = await mem.get_user_message_candidates(message.author.id, message.author.id if is_dm else message.channel.id, 100)
@@ -3312,34 +3322,6 @@ async def _interaction_session(message, interaction):
     if duo:
         return "duo", duo
     return "", None
-
-
-def _env_positive_int(name: str, default: int) -> int:
-    try:
-        return max(1, int(os.getenv(name, "") or default))
-    except ValueError:
-        return default
-
-
-# Model-backed chat replies per person per minute (the owner is exempt); the hourglass notice at most every 45 s.
-_CHAT_REPLY_LIMITER = SlidingWindowLimiter(_env_positive_int("CHAT_REPLIES_PER_MINUTE", 10), 60)
-_RATE_NOTICE_LIMITER = SlidingWindowLimiter(1, 45)
-_UNSOLICITED_PROTECTIVE: dict[int, float] = {}
-UNSOLICITED_PROTECTIVE_SECONDS = 600
-
-
-def _unsolicited_protective_allowed(user_id: int, *, now: float | None = None) -> bool:
-    """A message that was not aimed at the bot gets at most one protective reply per person per 10 minutes. Before
-    this, everyday words ("poison build", "tax advice", "awful day") made the bot answer strangers' messages."""
-    now = time.monotonic() if now is None else now
-    if len(_UNSOLICITED_PROTECTIVE) > 2000:
-        for uid in [u for u, ts in _UNSOLICITED_PROTECTIVE.items() if now - ts > UNSOLICITED_PROTECTIVE_SECONDS]:
-            _UNSOLICITED_PROTECTIVE.pop(uid, None)
-    last = _UNSOLICITED_PROTECTIVE.get(user_id)
-    if last is not None and now - last < UNSOLICITED_PROTECTIVE_SECONDS:
-        return False
-    _UNSOLICITED_PROTECTIVE[user_id] = now
-    return True
 
 
 async def _priority_reply(message, interaction):
@@ -3464,14 +3446,7 @@ async def _dispatch_message(message):
         if PARTNER_BOT_ID and message.guild and any(u.id == PARTNER_BOT_ID for u in message.mentions) and bot.user not in message.mentions:
             interaction.consume("partner_target", suppressed=True)
             return
-        if interaction.safety.protective and (
-            interaction.direct
-            or (
-                interaction.safety.crisis
-                and not (interaction.opted_out or interaction.quiet_hours)
-                and _unsolicited_protective_allowed(message.author.id)
-            )
-        ):
+        if interaction.safety.protective and interaction.direct:  # never unprompted (everyday words used to set it off)
             await _priority_reply(message, interaction)
             return
         interaction.session_owner, interaction.session = await _interaction_session(message, interaction)
@@ -4346,9 +4321,7 @@ async def _deliver_normal_reply(message, interaction, prepared, reply):
             user_id=prepared.user_id,
         )
     # Strip first, then turn @Name into real mentions (the other order deleted every mention it had just made).
-    original_reply = limit_user_mentions(resolve_mentions(
-        strip_narration(reply), message.guild if message.guild else None,
-    ))
+    original_reply = resolve_mentions(strip_narration(reply), message.guild if message.guild else None)
     display_reply = original_reply
     if eligible_for_silent_judge(prepared.content) and random.random() < .003:
         try:
@@ -4427,15 +4400,6 @@ async def _on_message_routed(message, interaction):
     if await _handle_optional_character_behavior(message, interaction, prepared):
         return
 
-    if not prepared.is_owner and not _CHAT_REPLY_LIMITER.allow(prepared.user_id):
-        # One person cannot burn the shared model quota: past the limit they get an hourglass, not a reply.
-        if _RATE_NOTICE_LIMITER.allow(prepared.user_id):
-            try:
-                await message.add_reaction("⏳")
-            except discord.HTTPException:
-                pass
-        interaction.consume("rate_limited", suppressed=True)
-        return
     extra = await _build_normal_response_context(message, interaction, prepared)
     reply = await _generate_normal_reply(message, interaction, prepared, extra)
     if reply is None:

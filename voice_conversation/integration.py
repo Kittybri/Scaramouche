@@ -13,7 +13,6 @@ import time
 
 import discord
 
-from awareness_features import classify_safety, protective_prompt
 from .receive import ReceiveBackend
 from .session import Playback, Session
 from .speech import GroqSTT, Limits
@@ -451,7 +450,6 @@ class VoiceConversation:
                         return ""
                     await self.mem.upsert_user(uid, str(member), member.display_name)
                     user = await self.mem.get_user(uid) or {}
-                    safety = protective_prompt(self.name, classify_safety(text))
                     return await self.respond(
                         uid,
                         channel.id,
@@ -459,7 +457,7 @@ class VoiceConversation:
                         user,
                         member.display_name,
                         member.mention,
-                        extra_context=extra + "\n" + safety,
+                        extra_context=extra,
                         is_owner=uid == self.owner_id,
                         channel_obj=channel,
                         is_dm=False,

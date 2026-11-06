@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 import discord
 import pytest
 
-from narration import chunk_text, limit_user_mentions, neutralize_mass_mentions, strip_narration
+from narration import chunk_text, neutralize_mass_mentions, strip_narration
 
 
 def async_test(function):
@@ -67,7 +67,6 @@ def test_mass_and_raw_mentions_never_survive():
         assert token not in out
     assert "<@&" not in neutralize_mass_mentions("<@&<@&1>1>").replace("<@& 1>", "")
     assert neutralize_mass_mentions("@@everyone") == "everyone"
-    assert limit_user_mentions("<@1> <@2> <@3> <@4>", 2) == "<@1> <@2>"
 
 
 def test_chunking_keeps_every_word_under_the_limit():
@@ -264,7 +263,7 @@ def _guild_message(runtime, mid, content, *, mentions=()):
 
 
 @async_test
-async def test_no_unsolicited_replies_over_keywords_and_opt_out_is_respected(runtime, monkeypatch):
+async def test_no_unprompted_replies_to_messages_not_aimed_at_the_bot(runtime, monkeypatch):
     monkeypatch.setattr(runtime.bot, "get_context", AsyncMock(return_value=NS(command=None, prefix=None, invoked_with=None, valid=False)))
     monkeypatch.setattr(runtime, "PRIVACY_DELETION", NS(is_pending=AsyncMock(return_value=False)))
     monkeypatch.setattr(runtime, "VOICE_COMMANDS", NS(maybe_leave=AsyncMock(return_value=False), maybe_join=AsyncMock(return_value=False)))
@@ -274,9 +273,6 @@ async def test_no_unsolicited_replies_over_keywords_and_opt_out_is_respected(run
     monkeypatch.setattr(runtime, "_priority_reply", priority)
     monkeypatch.setattr(runtime, "_on_message_routed", routed)
     monkeypatch.setattr(runtime, "_interaction_session", AsyncMock(return_value=("", None)))
-    quiet = {"now": False}  # pinned: the default quiet hours (23:00-08:00) would otherwise depend on when this runs
-    monkeypatch.setattr(runtime, "_is_in_quiet_hours", lambda user: quiet["now"])
-    runtime._UNSOLICITED_PROTECTIVE.clear()
 
     def memory_for(user):
         return NS(upsert_user=AsyncMock(return_value=0.0), track_channel=AsyncMock(), get_user=AsyncMock(return_value=user),
@@ -290,19 +286,12 @@ async def test_no_unsolicited_replies_over_keywords_and_opt_out_is_respected(run
     await dispatch(8001, "this poison build is so broken lol", {"proactive": True})
     await dispatch(8002, "I need tax advice for my side hustle", {"proactive": True})
     await dispatch(8003, "awful day at work, whatever", {"proactive": False})
-    assert priority.await_count == 0  # keywords alone never make the bot answer a message that was not for it
-    await dispatch(8004, "honestly i just want to die", {"proactive": False})
-    assert priority.await_count == 0  # an opted-out person is not answered unprompted either
-    quiet["now"] = True
-    await dispatch(8009, "honestly i just want to die", {"proactive": True})
-    assert priority.await_count == 0  # nor during their quiet hours
-    quiet["now"] = False
-    await dispatch(8005, "honestly i just want to die", {"proactive": True})
-    await dispatch(8006, "i really want to die", {"proactive": True})
-    assert priority.await_count == 1  # a real crisis signal gets one protective reply, then a cooldown
+    await dispatch(8004, "honestly i just want to die", {"proactive": True})
+    await dispatch(8005, "i really want to die", {"proactive": True})
+    assert priority.await_count == 0  # he is not a helper: nothing unprompted, whatever the message says
     bot_user = runtime.bot._connection.user
     await dispatch(8007, "I need tax advice", {"proactive": True}, mentions=[bot_user])
-    assert priority.await_count == 2  # aimed at the bot: answered carefully as before
+    assert priority.await_count == 1  # aimed at the bot: answered (in character, no protective instruction)
 
 
 # ── !rank ────────────────────────────────────────────────────────────────────

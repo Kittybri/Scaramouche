@@ -7,7 +7,7 @@ from enum import Enum
 import re
 import time
 
-from awareness_features import SafetyContext, classify_safety, advice_kind, protective_prompt
+from awareness_features import SafetyContext, classify_safety, advice_kind
 from character_bits import eligible_for_joke
 
 CURRENT = ContextVar("interaction", default=None)
@@ -183,8 +183,6 @@ def resolve_character(context, user=None, dimensions=None):
 def authoritative_prompt(context, user=None, dimensions=None, *, resolved=None):
     """Render the final directive, reusing a response's pre-resolved state."""
     resolved = (resolved or resolve_character(context, user, dimensions)).prompt()
-    if context.safety.protective:
-        resolved += "\n" + protective_prompt("scaramouche", context.safety)
     if context.serious:
         resolved += "\nACCURACY_FIRST: answer the current need directly. No jokes, quizzes, selective hearing, hostile callbacks, dramatic refusals or arbitrary brevity. Do not claim professional expertise."
     return resolved

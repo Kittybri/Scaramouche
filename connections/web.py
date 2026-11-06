@@ -31,9 +31,7 @@ def create_app(service):
     @web.middleware
     async def boundary(request, handler):
         now = time.monotonic()
-        # Do not trust arbitrary X-Forwarded-For headers. Behind the recommended proxy every request comes from the
-        # proxy, so this is a shared safety valve; per-client limits live in the proxy (see nginx.conf.example).
-        key = request.remote or "unknown"
+        key = request.remote or "unknown"  # Do not trust arbitrary X-Forwarded-For headers.
         start, count = rates.get(key, (now, 0))
         if now - start > 60:
             start, count = now, 0

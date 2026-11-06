@@ -125,7 +125,7 @@ accidents and emergencies do not increase the streak. Meaningful repeated events
 may create one compact label, not automatic trust loss or a permanent grudge.
 Scaramouche's prompt permits temporary pride/irritation; Wanderer adapts and helps.
 Serious content overrides banter and ends further interrogation questions, letting
-the normal protective reply complete before restoration. Detection is heuristic,
+the normal reply complete before restoration. Detection is heuristic,
 not a guarantee of understanding every emergency or intent.
 
 **Duo:** types are `agree`, `disagree`, `correct`, `take_over`, `finish_thought`, and
