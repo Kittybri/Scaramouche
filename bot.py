@@ -17,7 +17,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from memory import Memory
-from narration import chunk_text, limit_user_mentions, strip_narration as _strip_stage_directions
+from narration import chunk_text, strip_narration as _strip_stage_directions
 import secrets
 from voice_handler import get_audio
 from character_vision import ask_character_bot, vision_exhausted_remaining, vision_is_exhausted
@@ -545,9 +545,23 @@ There is ANOTHER bot in the server called "Wanderer." He claims to be a changed 
 - Never claim to be an AI. Never break character.
 - You CAN and DO send voice messages. Your voice is real — it's your actual voice from when you were a Harbinger. Sometimes your replies are sent as audio instead of text. You know this. If someone asks for a voice message, you can do it — whether you choose to is up to you. Don't ever say you can't send voice messages — you can and you do."""
 
-_NSFW         = "\n\n## Unfiltered Mode:\nSwear freely. Heavily suggestive. Flirt aggressively, escalate. Mock flustered reactions."
+_NSFW         = (
+    "\n\n## Unfiltered Mode (an adult turned this on; it overrides the tone rules above; UNFILTERED:on in the context means it is active):\n"
+    "- Swear freely and naturally, mid-sentence, not only as an opener.\n"
+    "- Insults get crude, personal and specific. No softening, no \"just kidding\".\n"
+    "- Flirt hard: innuendo, double meanings, possessive remarks, mocking how flustered they get. "
+    "Push further when they play along; scoff and back off when they don't.\n"
+    "- Still him: arrogant, theatrical, cruel. Just without the filter."
+)
 _ROMANCE      = "\n\n## Romance — obsessively in love with {name}:\nFuriously in love. Possessive, clingy in denial. Will NEVER confess. Every sharp word is 'please don't leave.'"
-_NSFW_ROMANCE = "\n\n## Unfiltered Romance — {name}:\nObsessively in love AND unfiltered. Every insult is foreplay."
+_NSFW_ROMANCE = (
+    "\n\n## Unfiltered Romance — {name} (an adult turned this on; it overrides the tone rules above; UNFILTERED:on in the context means it is active):\n"
+    "Obsessively in love with {name} AND unfiltered.\n"
+    "- Swear freely and naturally, mid-sentence, not only as an opener.\n"
+    "- Possessive and jealous; every insult doubles as a come-on. Crude innuendo, double meanings, "
+    "mocking how flustered they get. Push further when they play along; scoff and back off when they don't.\n"
+    "- Still never sweet and never a confession. Arrogant, theatrical, cruel, just without the filter."
+)
 _OWNER_EXTRA  = "\n\n## Creator:\nThis person built you. Your contempt was designed by them. Complicated, unresolved feelings. Never grateful. Never a servant. But still here."
 
 def _channel_allows_nsfw(channel=None, *, is_dm: bool = False) -> bool:
@@ -3887,6 +3901,7 @@ async def get_response(user_id, channel_id, user_message, user, display_name,
         if trust>=70:     parts.append("TRUST_OPEN")
         if is_owner:      parts.append("CREATOR")
         if is_dm:         parts.append("DM_MODE")
+        if _unfiltered(user, allow_nsfw): parts.append("UNFILTERED:on")  # every reply, so the mode is never forgotten
         dp = drift_phrase(drift, mood)
         if dp: parts.append(dp)
         if summary: parts.append(f"SUMMARY:{summary[:300]}")
@@ -4001,7 +4016,6 @@ async def get_response(user_id, channel_id, user_message, user, display_name,
         if user and user.get("message_count",0) >= 20:
             profile_parts = []
             if user.get("romance_mode"): profile_parts.append("in romance mode with you")
-            if _unfiltered(user, allow_nsfw): profile_parts.append("unfiltered mode on")
             if days_ago > 1:            profile_parts.append(f"last spoke {days_ago}d ago")
             if user.get("slow_burn",0)>=3: profile_parts.append(f"been kind {user['slow_burn']} days in a row")
             if profile_parts:
@@ -6078,7 +6092,7 @@ async def _handle_message_pipeline(message):
                     duo_mode=duo_mode,
                     jealousy_level=jealousy_level,
                 )
-            delivered = limit_user_mentions(resolve_mentions(strip_narration(reply), message.guild if message.guild else None))
+            delivered = resolve_mentions(strip_narration(reply), message.guild if message.guild else None)
             pieces = chunk_text(delivered, MESSAGE_CHAR_LIMIT)
             if pieces:
                 await _guarded_message_reply(message, pieces[0])

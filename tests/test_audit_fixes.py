@@ -155,9 +155,6 @@ class NarrationTests(unittest.TestCase):
         self.assertFalse(bot.bot.allowed_mentions.everyone)
         self.assertFalse(bot.bot.allowed_mentions.roles)
 
-    def test_at_most_two_user_mentions_per_reply(self):
-        self.assertEqual(narration.limit_user_mentions("<@1> <@2> <@3> hi"), "<@1> <@2> hi")
-
     def test_long_text_is_split_under_discords_limit(self):
         text = " ".join(f"word{i}" for i in range(900))
         pieces = narration.chunk_text(text, bot.MESSAGE_CHAR_LIMIT)
@@ -384,6 +381,9 @@ class AdultModeTests(BotTestCase):
         self.assertNotIn(bot._NSFW, bot.build_system({**user, "adult_confirmed": True}, allow_nsfw=False))
         self.assertNotIn(bot._NSFW, bot.build_system({**user, "adult_confirmed": True}))
         self.assertIn(bot._NSFW, bot.build_system({**user, "adult_confirmed": True}, allow_nsfw=True))
+        romance = {**user, "romance_mode": True, "adult_confirmed": True}
+        self.assertIn("Unfiltered Romance — Kai", bot.build_system(romance, "Kai", allow_nsfw=True))
+        self.assertNotIn("Unfiltered", bot.build_system(romance, "Kai"))
 
     def test_only_dms_and_age_restricted_channels_allow_it(self):
         guild = NS(id=1)
