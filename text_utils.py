@@ -355,8 +355,9 @@ def resolve_name_mentions(text: str, name_to_id: Mapping[str, int]) -> str:
 
 
 _ROLE_MENTION_RE = re.compile(r"<@&\d+>")
-# First '@' of a run, possessive: linear on "@@@@..." and no word boundary, because Discord matches "@herewhat" too.
-_MASS_MENTION_RE = re.compile(r"(?<!@)@++(?=everyone|here)", re.IGNORECASE)
+# From the first '@' of a run (the lookbehind keeps it linear on "@@@@..."; no possessive quantifier,
+# which needs Python 3.11) and no word boundary, because Discord matches "@herewhat" too.
+_MASS_MENTION_RE = re.compile(r"(?<!@)@+(?=everyone|here)", re.IGNORECASE)
 
 
 def neutralize_mass_mentions(text: str | None) -> str:
