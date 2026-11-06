@@ -1,0 +1,4 @@
+# Everything needed to run the checks locally and in CI. The linter is pinned so that a new release (with new rules)
+# cannot turn a green build red on its own; bump it deliberately.
+-r requirements.txt
+ruff==0.17.4

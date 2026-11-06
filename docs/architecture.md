@@ -15,6 +15,8 @@ flowchart TD
     B --> L[llm.py: Groq key rotation and model fallback]
     B --> T[text_utils.py: narration stripping, mentions, keyword matching]
     B --> Z[safety.py and limits.py: crisis replies, rate limits, capped downloads]
+    B --> D[doc_extract.py: uploaded documents opened in a resource-limited child process]
+    B --> E[envfile.py: loads only the project's own .env]
     B <--> P[Wanderer: partner interactions]
 ```
 
@@ -22,7 +24,7 @@ flowchart TD
 
 `bot.py` currently holds much of the orchestration. Large-file size is not a quality metric; progressively separating transport, provider access, memory, and delivery would improve maintainability. Such refactoring should be backed by tests and performed independently of documentation updates.
 
-The offline tests exercise the real implementations of `anti_repeat.py`, `text_utils.py`, `relationship_engine.py`, `llm.py`, `limits.py`, `safety.py`, `grounded_search.py` (against saved result pages) and `memory.py` (on a temporary database). A further module drives `bot.py` through a mock Discord and a fake model to check message routing, privacy scoping, rate limits and commands. None of it connects to Discord or a model provider, so it is not a measure of live quality. The separate [repair lab](https://github.com/Kittybri/agent-repair-lab) tests simplified, explicit contracts for retrieval, routing, voice confidence, memory attribution, and complete delivery.
+The offline tests exercise the real implementations of `anti_repeat.py`, `text_utils.py`, `relationship_engine.py`, `llm.py`, `limits.py`, `safety.py`, `doc_extract.py` (including zip and PDF bombs), `envfile.py`, `grounded_search.py` (against saved result pages) and `memory.py` (on a temporary database). A further module drives `bot.py` through a mock Discord and a fake model to check message routing, privacy scoping, rate limits and commands. None of it connects to Discord or a model provider, so it is not a measure of live quality. The separate [repair lab](https://github.com/Kittybri/agent-repair-lab) tests simplified, explicit contracts for retrieval, routing, voice confidence, memory attribution, and complete delivery.
 
 ## Operational concerns
 

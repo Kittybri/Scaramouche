@@ -1,5 +1,6 @@
 """Offline checks for memory.py on a temporary database: migrations, privacy scoping, reset, reminders."""
 
+import asyncio
 import importlib.util
 import os
 import sqlite3
@@ -65,6 +66,82 @@ class MemoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(user["adult_confirmed"])
         self.assertEqual((await mem.get_history(1, 5))[0]["content"], "old message")
         self.assertEqual((await mem.get_due_reminders())[0]["reminder"], "old reminder")
+
+    async def test_topics_and_summaries_keep_their_dm_origin_apart(self):
+        await self.mem.upsert_user(1, "a", "A")
+        await self.mem.record_topic(1, "health", private=True)
+        await self.mem.record_topic(1, "games")
+        await self.mem.record_topic(1, "games", private=True)
+        public = {t["topic"]: t["count"] for t in await self.mem.get_top_topics(1, 5, public_only=True)}
+        everything = {t["topic"]: t["count"] for t in await self.mem.get_top_topics(1, 5)}
+        self.assertEqual(public, {"games": 1})
+        self.assertEqual(everything, {"health": 1, "games": 2})
+        await self.mem.save_summary(1, "public summary")
+        await self.mem.save_summary(1, "dm summary", private=True)
+        user = await self.mem.get_user(1)
+        self.assertEqual((user["memory_summary"], user["memory_summary_dm"]), ("public summary", "dm summary"))
+        await self.mem.reset_user(1)
+        user = await self.mem.get_user(1)
+        self.assertEqual((user["memory_summary"], user["memory_summary_dm"]), (None, None))
+        self.assertEqual(await self.mem.get_top_topics(1, 5), [])
+
+    async def test_summaries_and_topics_from_before_the_split_count_as_private(self):
+        old_dir = tempfile.mkdtemp(dir=self.tmp.name)
+        with sql(os.path.join(old_dir, "scaramouche.db")) as db:
+            db.executescript(
+                "CREATE TABLE users (user_id INTEGER PRIMARY KEY, username TEXT, display_name TEXT, "
+                "memory_summary TEXT, summary_msg_count INTEGER, message_count INTEGER);"
+                "INSERT INTO users VALUES (1,'u','U','a summary nobody can place',400,520);"
+                "CREATE TABLE user_topics (user_id INTEGER, topic TEXT, count INTEGER DEFAULT 0, last_seen REAL DEFAULT 0, PRIMARY KEY (user_id, topic));"
+                "INSERT INTO user_topics VALUES (1,'health',4,1);")
+        mem = self.memory.Memory("scaramouche", data_dir=old_dir)
+        await mem.init()
+        user = await mem.get_user(1)
+        self.assertIsNone(user["memory_summary"])  # nothing unproven reaches a server channel
+        self.assertEqual(user["memory_summary_dm"], "a summary nobody can place")
+        self.assertTrue(await mem.needs_summary(1))  # and a proper (public) one gets built
+        self.assertEqual(await mem.get_top_topics(1, 3, public_only=True), [])
+        self.assertEqual([t["topic"] for t in await mem.get_top_topics(1, 3)], ["health"])
+        await mem.save_summary(1, "fresh public summary")
+        await mem.init()  # the migration runs once: a second start keeps what was written since
+        user = await mem.get_user(1)
+        self.assertEqual((user["memory_summary"], user["memory_summary_dm"]), ("fresh public summary", "a summary nobody can place"))
+
+    async def test_simultaneous_first_messages_do_not_collide(self):
+        # four handlers racing to register the same brand-new user used to raise IntegrityError in most of them
+        for uid in range(1000, 1030):
+            results = await asyncio.gather(*[self.mem.upsert_user(uid, f"u{uid}", f"name {i}") for i in range(4)], return_exceptions=True)
+            self.assertEqual([r for r in results if isinstance(r, Exception)], [])
+            self.assertEqual((await self.mem.get_user(uid))["username"], f"u{uid}")
+        with sql(self.mem.db_path) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM users WHERE user_id>=1000").fetchone()[0], 30)
+        first = (await self.mem.get_user(1000))["first_seen"]
+        await self.mem.upsert_user(1000, "renamed", "Renamed")
+        user = await self.mem.get_user(1000)
+        self.assertEqual((user["username"], user["first_seen"]), ("renamed", first))  # first contact is kept
+
+    async def test_simultaneous_trivia_answers_all_count(self):
+        results = await asyncio.gather(*[self.mem.update_trivia(5, i % 2 == 0) for i in range(8)], return_exceptions=True)
+        self.assertEqual([r for r in results if isinstance(r, Exception)], [])
+        with sql(self.mem.db_path) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*), SUM(correct), SUM(wrong) FROM trivia WHERE user_id=5").fetchone(), (1, 4, 4))
+        self.assertEqual({k: v for k, v in (await self.mem.get_trivia_stats(5)).items() if k in ("correct", "wrong")}, {"correct": 4, "wrong": 4})
+
+    async def test_duplicate_trivia_rows_from_older_versions_are_merged_on_start(self):
+        old_dir = tempfile.mkdtemp(dir=self.tmp.name)
+        with sql(os.path.join(old_dir, "scaramouche.db")) as db:
+            db.executescript(
+                "CREATE TABLE trivia (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, correct INTEGER DEFAULT 0, wrong INTEGER DEFAULT 0);"
+                "INSERT INTO trivia (user_id,correct,wrong) VALUES (1,2,1),(1,3,0),(1,0,4),(2,5,5);")
+        mem = self.memory.Memory("scaramouche", data_dir=old_dir)
+        await mem.init()
+        with sql(mem.db_path) as db:
+            rows = db.execute("SELECT user_id, correct, wrong FROM trivia ORDER BY user_id").fetchall()
+        self.assertEqual(rows, [(1, 5, 5), (2, 5, 5)])
+        await mem.update_trivia(1, True)
+        await mem.init()  # idempotent
+        with sql(mem.db_path) as db:
+            self.assertEqual(db.execute("SELECT correct, wrong FROM trivia WHERE user_id=1").fetchone(), (6, 5))
 
     async def test_dm_content_is_kept_out_of_public_queries(self):
         await self.mem.track_channel(100, 7)

@@ -1,5 +1,7 @@
 """Offline checks for text_utils: narration stripping, keyword matching, mentions, chunking, parsers."""
 
+import random
+import re
 import unittest
 
 from text_utils import (
@@ -9,6 +11,7 @@ from text_utils import (
     has_keyword,
     keyword_regex,
     needs_search,
+    neutralize_mass_mentions,
     normalize_text,
     parse_verdict,
     prompt_safe,
@@ -28,6 +31,42 @@ class StripNarrationTests(unittest.TestCase):
         )
         self.assertEqual(strip_narration("(Hmph.) Go on."), "Go on.")
         self.assertEqual(strip_narration("(sarcastically) Wonderful."), "Wonderful.")
+
+    def test_emphasis_keeps_its_words(self):
+        # Deleting these spans used to flip the meaning ("I do *not* care" became "I do care").
+        for text in (
+            "I do *not* care about that",
+            "You are *never* going to win",
+            "I trust *no one* here",
+            "This is *very important*",
+            "This is *very important*.",
+            "*Never* say that again.",
+            "*You* are impossible.",
+            "Stop *staring* at me.",
+            "Don't *laugh*!",
+            "He said it *coldly*.",
+            "*Absolutely not.* I refuse.",
+            "Really. *Silence* is golden.",
+            "I *love* this and *hate* that.",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(strip_narration(text), text)
+
+    def test_stage_directions_are_still_removed_in_every_position(self):
+        cases = {
+            "*smirks* Pathetic.": "Pathetic.",
+            "Pathetic. *rolls his eyes*": "Pathetic.",
+            "Hmph. *takes a step back* You wouldn't understand.": "Hmph. You wouldn't understand.",
+            "I suppose *sighs* you may stay.": "I suppose you may stay.",
+            "Well. *a long pause* Go on.": "Well. Go on.",
+            "*Sighs.* Fine.": "Fine.",
+            "*he scoffs* As if.": "As if.",
+            "**bold** and *smirks* ok": "**bold** and ok",
+            "Line one.\n*turns away*\nLine two.": "Line one.\n\nLine two.",
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(strip_narration(text), expected)
 
     def test_speaker_tags_are_removed(self):
         self.assertEqual(strip_narration("Scaramouche muttered, Tch. How quaint."), "Tch. How quaint.")
@@ -106,6 +145,39 @@ class MentionTests(unittest.TestCase):
         self.assertEqual(out.count("<@"), 2)  # at most two real mentions survive
         self.assertEqual(sanitize_mentions("hi <@2>", set(), max_mentions=0), "hi")
 
+    def test_mass_mentions_have_no_word_boundary_gap(self):
+        # Discord matches the literal text, so "@herewhat" and "@everyone1" are pings too.
+        for text in ("@herewhat", "@everyone1", "@everyone_x", "x@everyone", "@@everyone", "@@@@here", "@EVERYONE", "@Here"):
+            with self.subTest(text=text):
+                self.assertNotRegex(sanitize_mentions(text, {1}), r"(?i)@(everyone|here)")
+                self.assertNotRegex(neutralize_mass_mentions(text), r"(?i)@(everyone|here)")
+        self.assertEqual(sanitize_mentions("hi @everyone, listen", {1}), "hi everyone, listen")
+
+    def test_a_removed_mention_cannot_rebuild_another_one(self):
+        for text in ("<@&<@&1>1>", "<@<@7>7>", "<@ !7>", "<@<@5>!7>", "<@&<@&<@&1>1>1>", "@<@&1>everyone"):
+            with self.subTest(text=text):
+                out = sanitize_mentions(text, {1})
+                self.assertNotRegex(out, r"(?i)@(everyone|here)")
+                self.assertNotRegex(out, r"<@&\d+>")
+                self.assertEqual(re.findall(r"<@!?(\d+)>", out), [])
+
+    def test_no_random_input_keeps_a_ping_token(self):
+        rng = random.Random(5)
+        pieces = ["<@", "@", "&", "!", "5", "7", "12", ">", "<", "everyone", "here", "<@&", "<@!", " ", "\u200b", "@@", " !", "<@5>", "<@7>", "<@&9>"]
+        for _ in range(20000):
+            text = "".join(rng.choice(pieces) for _ in range(rng.randint(1, 14)))
+            out = sanitize_mentions(text, {5}, max_mentions=2)
+            users = re.findall(r"<@!?(\d+)>", out)
+            self.assertIsNone(re.search(r"(?i)@(everyone|here)|<@&\d+>", out), (text, out))
+            self.assertTrue(all(int(u) == 5 for u in users) and len(users) <= 2, (text, out))
+
+    def test_neutralize_keeps_user_mentions(self):
+        out = neutralize_mass_mentions("hi @everyone <@&5> <@5>")
+        self.assertNotIn("@everyone", out)
+        self.assertNotIn("<@&5>", out)
+        self.assertIn("<@5>", out)
+        self.assertEqual(neutralize_mass_mentions(None), "")
+
 
 class ChunkTests(unittest.TestCase):
     def test_every_piece_fits_and_nothing_is_lost(self):
@@ -159,9 +231,6 @@ class ParserTests(unittest.TestCase):
         self.assertTrue(sources.startswith("Sources:"))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class PathologicalInputTests(unittest.TestCase):
     """Reply text and user text pass through these helpers; hostile or broken input must stay cheap."""
@@ -185,3 +254,7 @@ class PathologicalInputTests(unittest.TestCase):
         self.assertFast(needs_search, "what is " * (big // 8))
         self.assertFast(resolve_name_mentions, "@" + "a " * big, {"a": 1})
         self.assertFast(sanitize_mentions, "<@1> hi @everyone " * 6000, {1})
+
+
+if __name__ == "__main__":
+    unittest.main()

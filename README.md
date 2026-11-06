@@ -26,6 +26,7 @@ This project explores how a character bot can retain conversational history and 
 | Response repetition controls | `anti_repeat.py` and [offline tests](tests/test_anti_repeat.py) |
 | Text safety, mentions and keyword matching | `text_utils.py`, `safety.py`, `limits.py` and their [tests](tests/) |
 | Model access (key rotation, fallback) | `llm.py` |
+| Untrusted uploads (`!tedtalk` documents) | `doc_extract.py` and its [tests](tests/test_doc_extract.py) |
 | Optional voice output | `voice_handler.py` |
 | A real diagnosis and narrow repair | [PDF retrieval case study](https://github.com/Kittybri/agent-repair-lab/blob/main/docs/pdf-retrieval.md) |
 | Design tradeoffs and acceptance checks | [Turn ownership case study](https://github.com/Kittybri/agent-repair-lab/blob/main/docs/turn-ownership.md) |

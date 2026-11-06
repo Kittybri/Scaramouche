@@ -1,8 +1,10 @@
 """Groq access: API key rotation, model fallback and error classification.
 
 The bot never hard-codes a single model. ``GROQ_MODELS`` / ``GROQ_VISION_MODELS`` (comma separated)
-are tried in order; when Groq reports that a model is gone, the next one is used and remembered, so a
-retired model name degrades into a slower start instead of a dead bot.
+are tried in order. When Groq reports that a model is gone (or blocked for this account) it is skipped for a
+while, so a retired model name degrades into a slower start instead of a dead bot. Anything temporary (a rate
+limit, an outage) only moves *that request* on to the next model: the preferred model is tried first again as soon
+as it recovers.
 
 ``call_with_retry`` is *blocking* (the Groq SDK is synchronous) - call it from an executor.
 """
@@ -34,6 +36,9 @@ MAX_TOTAL_SECONDS = 90.0   # give up (and let the caller fall back) rather than 
 MAX_KEY_WAIT_SECONDS = 8.0
 DEFAULT_RATE_LIMIT_BLOCK = 20.0
 MAX_RATE_LIMIT_BLOCK = 3600.0
+FORBIDDEN_BLOCK = 600.0          # a 403 we cannot explain: pause that key for that model, not the whole key
+MODEL_GONE_SECONDS = 6 * 3600.0  # a retired model is not asked again for this long (then it is probed once more)
+MODEL_BLOCKED_SECONDS = 3600.0   # a model this account may not use (org setting, terms not accepted)
 
 
 def parse_model_list(value: str | None, default: Iterable[str], *, first: str | None = None) -> tuple[str, ...]:
@@ -54,8 +59,19 @@ def _status_code(exc: BaseException) -> int | None:
     return code if isinstance(code, int) else None
 
 
+_MODEL_BLOCKED_MARKERS = (
+    "permission_blocked", "model_permission", "blocked at the", "model_terms_required", "terms acceptance",
+    "does not have access to model", "not have access to the model",
+)
+
+
 def classify_error(exc: BaseException) -> str:
-    """Return one of: too_large, rate_limit, bad_key, model_gone, bad_params, transient, fatal."""
+    """Return one of: too_large, rate_limit, bad_key, model_blocked, forbidden, model_gone, bad_params, transient, fatal.
+
+    ``bad_key``: Groq does not accept the key (401). ``model_blocked``: this account may not use this model (a 403
+    about the model, or terms that were never accepted); the key is fine for other models. ``forbidden``: any other
+    403, which says nothing about which models still work.
+    """
     code = _status_code(exc)
     message = str(exc).lower()
     name = type(exc).__name__.lower()
@@ -63,8 +79,12 @@ def classify_error(exc: BaseException) -> str:
         return "too_large"
     if code == 429 or "rate_limit" in message or "ratelimit" in name:
         return "rate_limit"
-    if code in (401, 403) or "invalid api key" in message or "invalid_api_key" in message:
+    if any(marker in message for marker in _MODEL_BLOCKED_MARKERS):
+        return "model_blocked"
+    if code == 401 or "invalid api key" in message or "invalid_api_key" in message:
         return "bad_key"
+    if code == 403:
+        return "forbidden"
     if code == 404 or any(
         marker in message
         for marker in ("decommission", "model_not_found", "does not exist", "no longer supported", "model not found")
@@ -144,7 +164,8 @@ class RotatingGroq:
         self._models = {False: tuple(chat_models), True: tuple(vision_models)}
         if not self._models[False] or not self._models[True]:
             raise ValueError("model lists must not be empty")
-        self._good = {False: 0, True: 0}
+        # model id -> monotonic time until which it is skipped (retired or blocked for this account)
+        self._skip_until: dict[bool, dict[str, float]] = {False: {}, True: {}}
         # (key index, model id) -> monotonic time until which that pair is rate limited; model "*" blocks a whole key.
         self._blocked_until: dict[tuple[int, str], float] = {}
         self._cursor = 0
@@ -158,20 +179,27 @@ class RotatingGroq:
     def key_count(self) -> int:
         return len(self._clients)
 
+    def _skipped(self, vision: bool, model_id: str) -> bool:
+        return self._skip_until[vision].get(model_id, 0.0) > self._clock()
+
     def current_model(self, vision: bool = False) -> str:
+        """The model a new request starts with: the first one that is not currently marked retired / blocked."""
         models = self._models[vision]
-        return models[self._good[vision] % len(models)]
+        return next((m for m in models if not self._skipped(vision, m)), models[0])
 
     def _candidates(self, vision: bool, preferred: str | None) -> list[str]:
-        models = list(self._models[vision])
-        start = self._good[vision] % len(models)
-        ordered = models[start:] + models[:start]
-        if preferred and preferred not in ordered:
+        """Configured order (``preferred`` first). Models marked retired / blocked go last, as a final resort."""
+        ordered = list(self._models[vision])
+        if preferred:
+            if preferred in ordered:
+                ordered.remove(preferred)
             ordered.insert(0, preferred)
-        elif preferred:
-            ordered.remove(preferred)
-            ordered.insert(0, preferred)
-        return ordered
+        usable = [m for m in ordered if not self._skipped(vision, m)]
+        return usable + [m for m in ordered if self._skipped(vision, m)]
+
+    def _skip_model(self, vision: bool, model_id: str, seconds: float) -> None:
+        with self._lock:
+            self._skip_until[vision][model_id] = self._clock() + seconds
 
     def _blocked_for(self, idx: int, model_id: str) -> float:
         return max(self._blocked_until.get((idx, model_id), 0.0), self._blocked_until.get((idx, "*"), 0.0))
@@ -192,11 +220,11 @@ class RotatingGroq:
         with self._lock:
             self._blocked_until[(idx, model_id)] = self._clock() + max(1.0, min(seconds, MAX_RATE_LIMIT_BLOCK))
 
-    def _remember_good(self, vision: bool, model_id: str) -> None:
-        models = self._models[vision]
-        if model_id in models:
+    def _forget_skip(self, vision: bool, model_id: str) -> None:
+        """A request just worked on this model, so whatever kept it out no longer applies."""
+        if self._skip_until[vision].get(model_id):
             with self._lock:
-                self._good[vision] = models.index(model_id)
+                self._skip_until[vision].pop(model_id, None)
 
     @staticmethod
     def _adapt_params(model_id: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -233,29 +261,33 @@ class RotatingGroq:
                     last_exc = exc
                     kind = classify_error(exc)
                     log.warning("Groq %s on key %d / model %s: %s", kind, idx + 1, model_id, str(exc)[:200])
-                    if kind in ("rate_limit", "bad_key"):
-                        hold = retry_after_seconds(exc) or DEFAULT_RATE_LIMIT_BLOCK
+                    if kind in ("rate_limit", "bad_key", "forbidden"):
                         if kind == "bad_key":
-                            self._block(idx, "*", MAX_RATE_LIMIT_BLOCK)
+                            self._block(idx, "*", MAX_RATE_LIMIT_BLOCK)  # Groq rejects this key outright
+                        elif kind == "forbidden":
+                            self._block(idx, model_id, FORBIDDEN_BLOCK)  # unexplained: the other models may be fine
                         else:
-                            self._block(idx, model_id, hold)
+                            self._block(idx, model_id, retry_after_seconds(exc) or DEFAULT_RATE_LIMIT_BLOCK)
                         keys_failed += 1
                         if keys_failed >= len(self._clients):
                             break
                         continue
-                    if kind == "model_gone":
+                    if kind in ("model_gone", "model_blocked"):
+                        self._skip_model(vision, model_id, MODEL_GONE_SECONDS if kind == "model_gone" else MODEL_BLOCKED_SECONDS)
                         break
                     if kind == "bad_params" and not penalties_dropped:
                         penalties_dropped = True
                         params.pop("frequency_penalty", None)
                         params.pop("presence_penalty", None)
                         continue
-                    if kind == "transient" and transient_left > 0:
-                        transient_left -= 1
-                        self._sleep(0.8)
-                        continue
+                    if kind == "transient":
+                        if transient_left > 0:
+                            transient_left -= 1
+                            self._sleep(0.8)
+                            continue
+                        break  # still failing: try the next model instead of giving up on all of them
                     raise
-                self._remember_good(vision, model_id)
+                self._forget_skip(vision, model_id)
                 return resp
         if last_exc is not None:
             raise last_exc

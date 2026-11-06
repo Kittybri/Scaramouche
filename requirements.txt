@@ -1,16 +1,19 @@
-discord.py>=2.4.0
-groq>=0.9.0
-python-dotenv>=1.0.0
-aiosqlite>=0.20.0
-aiohttp>=3.9.0
-httpx>=0.27.0
-ormsgpack>=1.5.0
-gtts>=2.5.0
-python-pptx>=0.6.21
-python-docx>=1.1.0
-pdfplumber>=0.11.0
-pypdf>=4.0.0
-imageio-ffmpeg>=0.5.1
-requests>=2.32.0
-Pillow>=10.0.0
+# Each package is allowed up to (not including) the next major version, so a routine `pip install` cannot pull in a
+# breaking release. The lower bounds are the oldest versions the code was written against; the test suite runs
+# against the latest release below each cap.
+discord.py>=2.4.0,<3
+groq>=0.9.0,<2
+python-dotenv>=1.0.0,<2
+aiosqlite>=0.20.0,<1
+aiohttp>=3.9.0,<4
+httpx>=0.27.0,<1
+ormsgpack>=1.5.0,<2
+gtts>=2.5.0,<3
+python-pptx>=0.6.21,<2
+python-docx>=1.1.0,<2
+pdfplumber>=0.11.0,<1
+pypdf>=4.0.0,<7
+imageio-ffmpeg>=0.5.1,<1
+requests>=2.32.0,<3
+Pillow>=10.0.0,<13
 tzdata>=2024.1

@@ -1,6 +1,6 @@
 # Scaramouche Bot — Privacy Policy
 
-**Last updated: November 5, 2026**
+**Last updated: November 6, 2026**
 
 Scaramouche is a fan-made Discord character bot. This policy explains what the bot's code accesses, stores, and sends to other services when you use it. Discord also handles your messages and account information under its own privacy policy.
 
@@ -9,7 +9,7 @@ Scaramouche is a fan-made Discord character bot. This policy explains what the b
 - **Discord identity and settings:** Your user ID, username or display name, server and channel IDs, activity times, and the settings you choose, such as romance or NSFW mode, direct messages, and proactive replies.
 - **Conversations and memory:** Messages you send to the bot, its replies, summaries, remembered topics and jokes, game activity, and relationship or mood values used for continuing interactions. These records can include personal details you choose to share.
 - **Channel context:** To answer in context, the bot can read recent messages in a channel where it has access, including messages from people other than the person prompting it. The bot may send a shortened excerpt of that context and display names or mentions to its AI provider. It does not need to permanently save every message it reads for context.
-- **Private messages:** Direct messages with the bot are stored like any other conversation, but memories, callbacks and jokes that came from a DM are never used when the bot answers in a server channel, and commands that talk about another person use only what that person said in the same server.
+- **Private messages:** Direct messages with the bot are stored like any other conversation, but memories, callbacks, jokes, remembered topics and the long-term memory summary that came from a DM are never used when the bot answers in a server channel (it keeps a separate summary written from server messages only for that), and commands that talk about another person use only what that person said in the same server.
 - **Attachments and requests:** When you send an image or video to the bot, or reply to one while addressing it, the bot may download it (within size limits) and process image data or selected video frames; pictures posted elsewhere in a channel are not analysed. A text description of the media and your accompanying message may be saved in conversation memory. Messages that look like factual lookups (never personal or conversational ones), the query of search commands, and a location you give to the weather command are also processed to answer you; mentions and links are removed from search queries.
 
 ## Why it uses this information

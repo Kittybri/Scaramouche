@@ -5,15 +5,9 @@ from pathlib import Path
 from typing import Optional
 
 import requests
-from dotenv import load_dotenv
+from envfile import load_project_env
 
-
-# Load this project's .env first, then a parent folder's (for a shared checkout with Wanderer). load_dotenv never
-# overrides a variable that is already set, so the project's own file wins.
-_here = os.path.dirname(os.path.abspath(__file__))
-for _env_file in (os.path.join(_here, ".env"), os.path.join(_here, "..", ".env")):
-    if os.path.exists(_env_file):
-        load_dotenv(dotenv_path=_env_file)
+load_project_env()  # only this project's .env (a parent folder's only with LOAD_PARENT_ENV=1)
 
 XAI_API_KEY = (os.getenv("XAI_API_KEY") or "").strip()
 XAI_BASE_URL = (os.getenv("XAI_BASE_URL") or "https://api.x.ai/v1").rstrip("/")

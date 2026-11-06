@@ -43,6 +43,7 @@ class BotFlowTests(unittest.IsolatedAsyncioTestCase):
                         bot._notice_limiter, bot._crisis_reply_limiter):
             limiter.reset()
         bot._crisis_until.clear()
+        bot._crisis_channels.clear()
         bot._seen_messages._ids.clear()
         bot._member_names_cache.clear()
         bot._tedtalk_cache.clear()
@@ -137,6 +138,53 @@ class BotFlowTests(unittest.IsolatedAsyncioTestCase):
             bot._seen_messages._ids.clear()
             await bot.on_message(fakes.message(erin_dm, dm, f"remind me what we talked about, round {i}"))
         self.assertIn("PINEAPPLE", self.ai.prompts())  # ...while the DM itself may use them
+
+    async def test_dm_topics_and_summaries_never_shape_server_replies(self):
+        self.say("Noted.")
+        await self.mem.upsert_user(1, "a", "Alice")
+        await self.mem.record_topic(1, "zz-dm-topic", private=True)
+        await self.mem.record_topic(1, "zz-public-topic")
+        await self.mem.save_summary(1, "PUBLIC-SUMMARY-TEXT")
+        await self.mem.save_summary(1, "DM-ONLY-SUMMARY-TEXT", private=True)
+        user = await self.mem.get_user(1)
+        await bot.get_response(1, 500, "hello there my friend", user, "Alice", "<@1>", channel_obj=self.channel, is_dm=False)
+        seen = self.ai.prompts()
+        self.assertIn("PUBLIC-SUMMARY-TEXT", seen)
+        self.assertIn("zz-public-topic", seen)
+        self.assertNotIn("DM-ONLY-SUMMARY-TEXT", seen)
+        self.assertNotIn("zz-dm-topic", seen)
+        self.ai.calls.clear()
+        await bot.get_response(1, 1, "hello there my friend", user, "Alice", "<@1>", channel_obj=fakes.channel(901), is_dm=True)
+        seen = self.ai.prompts()  # ...while a DM may use everything
+        self.assertIn("DM-ONLY-SUMMARY-TEXT", seen)
+        self.assertIn("zz-dm-topic", seen)
+        # the commands that print memories into a channel agree
+        ctx = fakes.Ctx(self.alice, self.channel, self.guild)
+        await bot.memories_cmd.callback(ctx)
+        await bot.relationship_cmd.callback(fakes.Ctx(self.alice, self.channel, self.guild))
+        self.assertNotIn("zz-dm-topic", " ".join(ctx.texts()))
+
+    async def test_each_summary_is_written_from_its_own_messages(self):
+        self.say("A tidy summary.")
+        await self.mem.upsert_user(1, "a", "Alice")
+        await self.mem.track_channel(500, 50)
+        await self.mem.add_message(1, 500, "user", "chatter said in the server")
+        await self.mem.add_message(1, 1, "user", "PINEAPPLE said in a DM")
+        await bot._refresh_summary(1, "Alice")
+        public_prompt, private_prompt = [
+            " ".join(m["content"] for m in call["messages"] if isinstance(m["content"], str)) for call in self.ai.calls
+        ]
+        self.assertIn("chatter said in the server", public_prompt)
+        self.assertNotIn("PINEAPPLE", public_prompt)  # the summary shown in servers never read the DM
+        self.assertIn("PINEAPPLE", private_prompt)
+        user = await self.mem.get_user(1)
+        self.assertEqual((user["memory_summary"], user["memory_summary_dm"]), ("A tidy summary.", "A tidy summary."))
+        # someone who never uses DMs needs only the one summary
+        await self.mem.upsert_user(2, "b", "Bob")
+        await self.mem.add_message(2, 500, "user", "bob in the server")
+        self.ai.calls.clear()
+        await bot._refresh_summary(2, "Bob")
+        self.assertEqual(len(self.ai.calls), 1)
 
     async def test_mass_mentions_and_bogus_pings_are_neutralised(self):
         self.say("@everyone listen up <@&12345> and <@424242> and hello @Bob")
@@ -320,18 +368,33 @@ class BotFlowTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("PRIVATE DM", seen, command.name)
             self.assertNotIn("another server", seen, command.name)
 
-    async def test_rank_lists_only_people_in_this_server(self):
+    async def test_rank_counts_this_servers_messages_only_and_never_runs_dry(self):
         self.say("Mediocre.")
-        for uid, name, count in ((1, "Alice", 30), (2, "Bob", 20), (77, "Stranger Elsewhere", 999)):
+        await self.mem.track_channel(500, 50)
+        await self.mem.track_channel(600, 60)
+        for uid, name in ((1, "Alice"), (2, "Bob"), (77, "Stranger Elsewhere")):
             await self.mem.upsert_user(uid, name.lower(), name)
-            async with self.mem._connect() as db:
-                await db.execute("UPDATE users SET message_count=? WHERE user_id=?", (count, uid))
-                await db.commit()
+        async with self.mem._connect() as db:
+            rows = [(1, 500, "user", f"alice says {i}", time.time(), "scaramouche") for i in range(3)]
+            rows += [(2, 500, "user", "bob says hi", time.time(), "scaramouche")]
+            rows += [(1, 1, "user", "a private DM line", time.time(), "scaramouche")] * 9  # DMs do not count
+            rows += [(77, 600, "user", "elsewhere", time.time(), "scaramouche")] * 5
+            # a hundred people elsewhere who talk far more than anyone here: the old global top-80 filter ran dry
+            rows += [(1000 + n, 600, "user", "chatter", time.time(), "scaramouche") for n in range(100) for _ in range(20)]
+            await db.executemany("INSERT INTO messages (user_id,channel_id,role,content,ts,bot_name) VALUES (?,?,?,?,?,?)", rows)
+            await db.commit()
         ctx = fakes.Ctx(self.alice, self.channel, self.guild)
         await bot.rank_cmd.callback(ctx)
         embed = ctx.sent[-1][2]["embed"]
-        self.assertIn("Alice", embed.description)
+        self.assertIn("**Alice** — 3 messages", embed.description)
+        self.assertIn("**Bob** — 1 messages", embed.description)
+        self.assertLess(embed.description.index("Alice"), embed.description.index("Bob"))
         self.assertNotIn("Stranger", embed.description)
+        self.assertNotIn("private DM", embed.description)
+        # an empty server still gets a polite answer
+        other = fakes.Ctx(self.alice, fakes.channel(700, fakes.guild(70, [self.alice])), fakes.guild(70, [self.alice]))
+        await bot.rank_cmd.callback(other)
+        self.assertIn("don't know enough", other.texts()[0])
 
     async def test_summarize_uses_the_newest_messages(self):
         self.say("A summary.")
@@ -454,6 +517,28 @@ class BotFlowTests(unittest.IsolatedAsyncioTestCase):
         text, error = await bot._extract_material(fakes.attachment("x.pdf", "application/pdf"), pdf)
         self.assertIn("Teyvat", text)
 
+    async def test_tedtalk_refuses_a_zip_bomb_without_parsing_it(self):
+        from test_doc_extract import make_docx, zip_with_part
+        bomb = zip_with_part("word/document.xml", 100_000_000, make_docx())  # ~400 KB on disk, 100 MB of XML
+        started = time.perf_counter()
+        text, error = await bot._extract_material(fakes.attachment("n.docx", "application/octet-stream"), bomb)
+        self.assertEqual(text, "")
+        self.assertIn("far more data", error)
+        self.assertLess(time.perf_counter() - started, 2)
+        text, error = await bot._extract_material(fakes.attachment("broken.docx", "application/octet-stream"), b"not a zip")
+        self.assertEqual(text, "")
+        self.assertTrue(error)
+
+    async def test_pictures_with_absurd_pixel_counts_are_never_decoded(self):
+        import io
+        from PIL import Image
+        buffer = io.BytesIO()
+        Image.new("RGB", (600, 600), "red").save(buffer, "PNG")
+        original = buffer.getvalue()
+        with patch.object(bot, "MAX_DECODE_PIXELS", 100):
+            self.assertEqual(bot._shrink_image_blocking(original, "image/png", max_bytes=10), (original, "image/png"))
+        self.assertEqual(bot._shrink_image_blocking(original, "image/png", max_bytes=10)[1], "image/jpeg")
+
     async def test_tedtalk_end_to_end(self):
         self.say("Listen carefully. The mitochondria matter. f(x) = (x+1)^2. Pay attention.")
         sent = fakes.channel(510, self.guild)
@@ -495,6 +580,23 @@ class BotFlowTests(unittest.IsolatedAsyncioTestCase):
                 for task in list(bot._background_tasks):
                     task.cancel()
                 await asyncio.sleep(0)
+
+    async def test_closing_the_bot_stops_the_scheduled_jobs(self):
+        with patch.object(bot.bot, "wait_until_ready", AsyncMock()), patch.object(bot.commands.Bot, "close", AsyncMock()) as parent_close:
+            await bot.bot.setup_hook()
+            self.assertTrue(all(loop.is_running() for loop in bot.BACKGROUND_LOOPS))
+            tasks = list(bot._background_tasks)
+            await bot.bot.close()
+            await asyncio.sleep(0.05)
+            self.assertFalse(any(loop.is_running() for loop in bot.BACKGROUND_LOOPS))
+            self.assertTrue(all(task.done() for task in tasks))
+            parent_close.assert_awaited_once()
+
+    def test_status_lines_only_advertise_commands_that_exist(self):
+        import re
+        advertised = {name for _, text in bot.STATUSES for name in re.findall(r"!(\w+)", text)}
+        self.assertIn("scarahelp", advertised)
+        self.assertEqual([name for name in advertised if bot.bot.get_command(name) is None], [])
 
     async def test_closed_dms_switch_dms_off_instead_of_retrying_forever(self):
         self.say("Where did you go.")
@@ -595,6 +697,128 @@ class BotFlowTests(unittest.IsolatedAsyncioTestCase):
                 results.append("limited")
         self.assertEqual(results.count(True), 10)
         self.assertEqual(results.count("limited"), 2)
+
+    # ── the crisis window covers every way the bot can speak ─────────────────
+    async def test_an_unaddressed_crisis_message_gets_no_in_character_reply(self):
+        self.say("Pathetic.")
+        msg = fakes.message(self.alice, self.channel, "honestly i just wanna kms", g=self.guild)
+        with patch.object(bot.random, "random", return_value=0.0):  # every dice roll would normally say yes
+            await bot.on_message(msg)
+        self.assertEqual((msg.reply.await_count, len(self.ai.calls), bot.maybe_react.await_count), (0, 0, 0))
+        self.assertTrue(bot._in_crisis(1))
+        self.assertTrue(bot._channel_in_crisis(500))
+        self.assertFalse(bot._in_crisis(2))
+
+    async def test_crisis_window_silences_jokes_greetings_and_commentary(self):
+        self.say("Hmph. A hat? How dare you.")
+        await self.mem.upsert_user(1, "a", "Alice")
+        bot._arm_crisis_window(1, 500)
+        picture = fakes.attachment()
+        with patch.object(bot.random, "random", return_value=0.0), \
+                patch.object(bot, "download_capped", AsyncMock(return_value=b"IMG")) as download, \
+                patch.object(bot, "_vision_image_reply", AsyncMock(return_value="A cat.")) as vision:
+            joke = self.ping(self.alice, "what do you think of the hat, also i am going to sleep")
+            joke.attachments = [picture]
+            await bot.on_message(joke)
+        self.assertEqual((download.await_count, vision.await_count), (0, 0))  # no commentary on what they sent
+        self.assertIn("SAFETY_OVERRIDE", self.ai.prompts())
+        self.assertNotIn("Someone mentioned your hat", self.ai.prompts())  # the hat bit is skipped entirely
+        self.assertEqual(joke.reply.await_count, 1)
+        # milestones / greetings / anniversaries wait until the window is over
+        with patch.object(self.mem, "increment_message_count", AsyncMock(return_value=(100, True))):
+            note = fakes.message(self.alice, self.channel, "hello", g=self.guild)
+            await bot._periodic_announcements(note, await self.mem.get_user(1), True, bot._Budget(1))
+        self.assertEqual(self.channel.send.await_count, 0)
+        bot._crisis_until.clear()
+        with patch.object(self.mem, "increment_message_count", AsyncMock(return_value=(100, True))):
+            await bot._periodic_announcements(note, await self.mem.get_user(1), True, bot._Budget(1))
+        self.assertEqual(self.channel.send.await_count, 1)
+
+    async def test_crisis_window_keeps_unprompted_posts_away(self):
+        self.say("Something smug.")
+        await self.mem.track_channel(500, 50)
+        bot._arm_crisis_window(2, 500)  # Bob worried everyone in this channel
+        with patch.object(bot.bot, "get_channel", lambda cid: self.channel):
+            await bot._proactive_post(self.channel, 500, [1, 2])
+            self.assertEqual((self.channel.send.await_count, len(self.ai.calls)), (0, 0))
+            with patch.object(bot.asyncio, "sleep", AsyncMock()):  # it waits 45-120 s before speaking
+                await bot._unsent_simulation(self.channel, 500)
+            self.assertEqual(self.channel.send.await_count, 0)
+        # a slow-burn message that was queued before the window opened is dropped when it fires
+        bot._arm_crisis_window(1, None)
+        with patch.object(bot.asyncio, "sleep", AsyncMock()), patch.object(bot.bot, "get_channel", lambda cid: self.channel):
+            await bot._fire_slow_burn(1, 500, "Alice", False)
+        self.assertEqual((self.channel.send.await_count, len(self.ai.calls)), (0, 0))
+        # direct messages wait too
+        await self.mem.upsert_user(9, "z", "Zed")
+        past = time.time() - 5 * 86400
+        async with self.mem._connect() as db:
+            await db.execute("UPDATE users SET romance_mode=1, allow_dms=1, proactive=1, message_count=50, last_active=?, last_seen=? WHERE user_id=9", (past, past))
+            await db.commit()
+        zed = fakes.dm_user(9, "Zed")
+        bot._arm_crisis_window(9, None)
+        with patch.object(bot.bot, "fetch_user", AsyncMock(return_value=zed)):
+            await bot.absence_checker.coro()
+        self.assertEqual(zed.send.await_count, 0)
+
+    async def test_reminders_stay_plain_during_the_window_and_cannot_ping_others(self):
+        self.say("Don't forget, fool.")
+        owner = fakes.dm_user(1, "Alice")
+        ch = self.channel
+        text = "@everyone call <@&55> and <@2> about the thing"
+        with patch.object(bot.bot, "fetch_user", AsyncMock(return_value=owner)), \
+                patch.object(bot.bot, "fetch_channel", AsyncMock(return_value=ch)), \
+                patch.object(bot.bot, "get_channel", lambda cid: ch):
+            await self.mem.add_reminder(1, 500, text, time.time() - 1)
+            await bot.reminder_checker.coro()
+            sent, kwargs = ch.send.await_args.args[0], ch.send.await_args.kwargs
+            self.assertNotIn("@everyone", sent)
+            self.assertNotIn("<@&55>", sent)
+            self.assertIn("<@2>", sent)  # still readable ...
+            allowed = kwargs["allowed_mentions"]
+            self.assertFalse(allowed.everyone)
+            self.assertFalse(allowed.roles)
+            self.assertEqual([u.id for u in allowed.users], [1])  # ... but only the person being reminded is pinged
+            # inside the window: no model flavour at all, just the reminder
+            ch.send.reset_mock()
+            self.ai.calls.clear()
+            bot._arm_crisis_window(1, None)
+            await self.mem.add_reminder(1, 500, "drink some water", time.time() - 1)
+            await bot.reminder_checker.coro()
+            self.assertEqual(self.ai.calls, [])
+            self.assertIn("drink some water", ch.send.await_args.args[0])
+
+    async def test_every_in_character_side_path_filters_mentions(self):
+        hostile = "@everyone <@&12345> <@424242> @herewhat hello"
+        self.say(hostile)
+        await self.mem.upsert_user(1, "a", "Alice")
+        bad = ("@everyone", "<@&12345>", "<@424242>", "@herewhat")
+
+        def clean(text):
+            return not any(token in text for token in bad)
+
+        with patch.object(bot.random, "random", return_value=0.0):
+            for content in ("you will never win", "what a nice hat", "i prefer wanderer"):
+                bot._msg_limiter.reset()
+                bot._seen_messages._ids.clear()
+                msg = self.ping(self.alice, content)
+                await bot.on_message(msg)
+                for call in msg.reply.await_args_list + self.channel.send.await_args_list:
+                    self.assertTrue(clean(call.args[0]), (content, call.args[0]))
+            note = fakes.message(self.alice, self.channel, "hello", g=self.guild)
+            with patch.object(self.mem, "increment_message_count", AsyncMock(return_value=(50, True))):
+                await bot._periodic_announcements(note, await self.mem.get_user(1), False, bot._Budget(1))
+            with patch.object(bot.asyncio, "sleep", AsyncMock()), patch.object(bot.bot, "get_channel", lambda cid: self.channel):
+                await bot._fire_slow_burn(1, 500, "Alice", False)
+        for call in self.channel.send.await_args_list:
+            self.assertTrue(clean(call.args[0]), call.args[0])
+        self.assertGreaterEqual(self.channel.send.await_count, 2)
+
+    async def test_the_send_helpers_defuse_mass_mentions_whatever_the_caller_did(self):
+        await bot.send_text(self.channel, "@everyone and <@&9> hi")
+        await bot.reply_text(fakes.message(self.alice, self.channel, "x", g=self.guild), "@here@everyone")
+        self.assertNotIn("@everyone", self.channel.send.await_args_list[0].args[0])
+        self.assertNotIn("<@&9>", self.channel.send.await_args_list[0].args[0])
 
 
 def unittest_response():

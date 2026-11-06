@@ -106,6 +106,7 @@ class Memory:
                     slow_burn_fired  INTEGER DEFAULT 0,
                     drift_score      INTEGER DEFAULT 0,
                     memory_summary   TEXT    DEFAULT NULL,
+                    memory_summary_dm TEXT   DEFAULT NULL,
                     summary_msg_count INTEGER DEFAULT 0,
                     last_statement   TEXT    DEFAULT NULL,
                     style_profile    TEXT    DEFAULT NULL,
@@ -212,6 +213,7 @@ class Memory:
                     user_id    INTEGER,
                     topic      TEXT,
                     count      INTEGER DEFAULT 0,
+                    public_count INTEGER DEFAULT 0,
                     last_seen  REAL DEFAULT 0,
                     PRIMARY KEY (user_id, topic)
                 );
@@ -267,6 +269,8 @@ class Memory:
                     updated_ts        REAL DEFAULT 0
                 );
             """)
+            async with db.execute("PRAGMA table_info(users)") as cur:
+                had_private_summary = any(row[1] == "memory_summary_dm" for row in await cur.fetchall())
             await self._ensure_columns(db, "users", {
                 "username":           "TEXT",
                 "display_name":       "TEXT",
@@ -297,6 +301,7 @@ class Memory:
                 "slow_burn_fired":    "INTEGER DEFAULT 0",
                 "drift_score":        "INTEGER DEFAULT 0",
                 "memory_summary":     "TEXT DEFAULT NULL",
+                "memory_summary_dm":  "TEXT DEFAULT NULL",
                 "summary_msg_count":  "INTEGER DEFAULT 0",
                 "last_statement":     "TEXT DEFAULT NULL",
                 "style_profile":      "TEXT DEFAULT NULL",
@@ -312,12 +317,30 @@ class Memory:
                 "private_mask":       "INTEGER DEFAULT 0",
                 "greeted_day":        "INTEGER DEFAULT 0",
             })
+            if not had_private_summary:
+                # An old summary may have been written from DMs and nobody can tell which: keep it for DMs only and
+                # let a fresh one (server messages only) be built for server channels.
+                await db.execute(
+                    "UPDATE users SET memory_summary_dm=memory_summary, memory_summary=NULL, summary_msg_count=0 "
+                    "WHERE memory_summary IS NOT NULL"
+                )
+            # Topics learned before this column existed have an unknown origin, so they count as private (public_count 0).
+            await self._ensure_columns(db, "user_topics", {"public_count": "INTEGER DEFAULT 0"})
             await self._ensure_columns(db, "messages", {"bot_name": "TEXT DEFAULT NULL"})
             await self._ensure_columns(db, "scene_state", {"important_prop": "TEXT DEFAULT NULL"})
             await self._ensure_columns(db, "reminders", {"dm": "INTEGER DEFAULT 0", "attempts": "INTEGER DEFAULT 0"})
             await self._ensure_columns(db, "memory_bank", {"private": "INTEGER DEFAULT 0"})
             await self._ensure_columns(db, "inside_jokes", {"private": "INTEGER DEFAULT 0"})
             await db.execute("UPDATE messages SET bot_name=? WHERE bot_name IS NULL", (self.bot_name,))
+            # One trivia row per user. Older versions could create several when answers arrived together; fold them
+            # into the first one so no score is lost, then let the database enforce it.
+            await db.execute(
+                "UPDATE trivia SET correct=(SELECT SUM(t.correct) FROM trivia t WHERE t.user_id=trivia.user_id), "
+                "wrong=(SELECT SUM(t.wrong) FROM trivia t WHERE t.user_id=trivia.user_id) "
+                "WHERE id IN (SELECT MIN(id) FROM trivia GROUP BY user_id HAVING COUNT(*)>1)"
+            )
+            await db.execute("DELETE FROM trivia WHERE id NOT IN (SELECT MIN(id) FROM trivia GROUP BY user_id)")
+            await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_trivia_user ON trivia(user_id)")
             for statement in _LOCAL_INDEXES:
                 await db.execute(statement)
             await db.commit()
@@ -407,28 +430,23 @@ class Memory:
 
     # ── Users ────────────────────────────────────────────────────────────────
     async def upsert_user(self, user_id: int, username: str, display_name: str):
+        """Create the user or refresh their name / activity. One atomic statement per database: a user's first two
+        messages can arrive together, and "look first, then insert" lets both decide to insert."""
         now = time.time()
         async with self._connect() as db:
-            async with db.execute("SELECT first_seen FROM users WHERE user_id=?", (user_id,)) as cur:
-                row = await cur.fetchone()
-            if row:
-                await db.execute(
-                    "UPDATE users SET username=?,display_name=?,last_seen=?,last_active=? WHERE user_id=?",
-                    (username, display_name, now, now, user_id))
-            else:
-                await db.execute(
-                    "INSERT INTO users (user_id,username,display_name,last_seen,last_active,first_seen) VALUES (?,?,?,?,?,?)",
-                    (user_id, username, display_name, now, now, now))
+            await db.execute(
+                "INSERT INTO users (user_id,username,display_name,last_seen,last_active,first_seen) VALUES (?,?,?,?,?,?) "
+                "ON CONFLICT(user_id) DO UPDATE SET username=excluded.username,display_name=excluded.display_name,"
+                "last_seen=excluded.last_seen,last_active=excluded.last_active",
+                (user_id, username, display_name, now, now, now),
+            )
             await db.commit()
         async with self._connect(self.shared_db_path) as db:
-            async with db.execute("SELECT first_seen FROM shared_users WHERE user_id=?", (user_id,)) as cur:
-                row = await cur.fetchone()
-            first_seen = row[0] if row and row[0] else now
             await db.execute(
                 "INSERT INTO shared_users (user_id,username,display_name,first_seen,last_seen,last_active) VALUES (?,?,?,?,?,?) "
                 "ON CONFLICT(user_id) DO UPDATE SET username=excluded.username,display_name=excluded.display_name,"
                 "last_seen=excluded.last_seen,last_active=excluded.last_active",
-                (user_id, username, display_name, first_seen, now, now),
+                (user_id, username, display_name, now, now, now),
             )
             await db.commit()
 
@@ -442,7 +460,7 @@ class Memory:
                        milestone_last,first_seen,last_seen,last_active,greeted_today,anniversary_last,
                        slow_burn,slow_burn_fired,drift_score,memory_summary,last_statement,
                        style_profile,emotional_arc,conflict_open,conflict_summary,last_conflict_ts,repair_progress,
-                       callback_memory,callback_ts,repair_count,adult_confirmed,private_mask
+                       callback_memory,callback_ts,repair_count,adult_confirmed,private_mask,memory_summary_dm
                 FROM users WHERE user_id=?
             """, (user_id,)) as cur:
                 row = await cur.fetchone()
@@ -476,7 +494,7 @@ class Memory:
             "last_active": row[22] or 0, "greeted_today": bool(row[23]),
             "anniversary_last": row[24] or 0,
             "slow_burn": row[25] or 0, "slow_burn_fired": bool(row[26]),
-            "drift_score": row[27] or 0, "memory_summary": row[28],
+            "drift_score": row[27] or 0, "memory_summary": row[28], "memory_summary_dm": row[41],
             "last_statement": row[29],
             "style_profile": style_profile,
             "emotional_arc": row[31] or "guarded",
@@ -525,19 +543,25 @@ class Memory:
             await db.execute(f"UPDATE user_preferences SET {field}=? WHERE user_id=?", (value, user_id))
             await db.commit()
 
-    async def record_topic(self, user_id: int, topic: str):
+    async def record_topic(self, user_id: int, topic: str, private: bool = False):
+        """Count a topic. ``private`` (it came from a DM) bumps the total but not the public count."""
         async with self._connect() as db:
             await db.execute(
-                "INSERT INTO user_topics (user_id,topic,count,last_seen) VALUES (?,?,1,?) "
-                "ON CONFLICT(user_id,topic) DO UPDATE SET count=count+1,last_seen=excluded.last_seen",
-                (user_id, topic[:40], time.time()),
+                "INSERT INTO user_topics (user_id,topic,count,public_count,last_seen) VALUES (?,?,1,?,?) "
+                "ON CONFLICT(user_id,topic) DO UPDATE SET count=count+1,public_count=public_count+excluded.public_count,"
+                "last_seen=excluded.last_seen",
+                (user_id, topic[:40], 0 if private else 1, time.time()),
             )
             await db.commit()
 
-    async def get_top_topics(self, user_id: int, limit: int = 3) -> list[dict]:
+    async def get_top_topics(self, user_id: int, limit: int = 3, *, public_only: bool = False) -> list[dict]:
+        """Most talked-about topics. ``public_only`` counts (and lists) only what was said in server channels: use it
+        whenever the result will be seen by, or shape a reply to, other people."""
+        column = "public_count" if public_only else "count"
         async with self._connect() as db:
             async with db.execute(
-                "SELECT topic,count,last_seen FROM user_topics WHERE user_id=? ORDER BY count DESC,last_seen DESC LIMIT ?",
+                f"SELECT topic,{column},last_seen FROM user_topics WHERE user_id=? AND {column}>0 "
+                f"ORDER BY {column} DESC,last_seen DESC LIMIT ?",
                 (user_id, limit),
             ) as cur:
                 rows = await cur.fetchall()
@@ -1305,12 +1329,15 @@ class Memory:
                 count, last = row[0] or 0, row[1] or 0
                 return count >= 500 and (count - last) >= 50
 
-    async def save_summary(self, user_id: int, summary: str):
+    async def save_summary(self, user_id: int, summary: str, private: bool = False):
+        """Store a summary. The public one is written from server messages only; the private one (``private=True``)
+        may draw on DMs and is only ever shown in DMs."""
+        column = "memory_summary_dm" if private else "memory_summary"
         async with self._connect() as db:
             async with db.execute("SELECT message_count FROM users WHERE user_id=?", (user_id,)) as cur:
                 row = await cur.fetchone(); count = row[0] if row else 0
             await db.execute(
-                "UPDATE users SET memory_summary=?, summary_msg_count=? WHERE user_id=?",
+                f"UPDATE users SET {column}=?, summary_msg_count=? WHERE user_id=?",
                 (summary[:1000], count, user_id))
             await db.commit()
 
@@ -1347,6 +1374,22 @@ class Memory:
             ) as cur:
                 rows = await cur.fetchall()
         return [{"user_id":r[0],"display_name":r[1],"message_count":r[2]} for r in rows]
+
+    async def get_top_users_in_guild(self, guild_id: int, limit: int = 40) -> list[dict]:
+        """Who talks to the bot most in the channels of one server, counted from that server's messages only.
+
+        DMs and other servers never count, so the ranking cannot depend on (or reveal) activity elsewhere and does
+        not run dry when a server's members are not among the bot's busiest users overall.
+        """
+        async with self._connect() as db:
+            async with db.execute(
+                "SELECT m.user_id, COUNT(*) AS n FROM messages m JOIN channels c ON c.channel_id=m.channel_id "
+                "WHERE c.guild_id=? AND m.role='user' AND m.user_id>0 AND (m.bot_name=? OR m.bot_name IS NULL) "
+                "GROUP BY m.user_id ORDER BY n DESC, m.user_id LIMIT ?",
+                (guild_id, self.bot_name, limit),
+            ) as cur:
+                rows = await cur.fetchall()
+        return [{"user_id": r[0], "message_count": r[1]} for r in rows]
 
     async def get_recent_user_ids(self, days: float = 2.0, limit: int = 3) -> list[int]:
         """A few random users seen in the last ``days`` days (used for the occasional mood swing)."""
@@ -1563,7 +1606,7 @@ class Memory:
             await db.execute("DELETE FROM phrase_cooldowns WHERE scope=?", (scope,))
             await db.execute("""UPDATE users SET mood=0,affection=0,trust=0,rival_id=NULL,grudge_nick=NULL,
                 affection_nick=NULL,message_count=0,milestone_last=0,slow_burn=0,slow_burn_fired=0,
-                drift_score=0,memory_summary=NULL,summary_msg_count=0,last_statement=NULL,style_profile=NULL,
+                drift_score=0,memory_summary=NULL,memory_summary_dm=NULL,summary_msg_count=0,last_statement=NULL,style_profile=NULL,
                 emotional_arc='guarded',conflict_open=0,conflict_summary=NULL,last_conflict_ts=0,repair_progress=0,
                 callback_memory=NULL,callback_ts=0,repair_count=0,private_mask=0,anniversary_last=0
                 WHERE user_id=?""", (user_id,))
@@ -1597,14 +1640,11 @@ class Memory:
     # ── Trivia ────────────────────────────────────────────────────────────────
     async def update_trivia(self, user_id: int, correct: bool):
         async with self._connect() as db:
-            async with db.execute("SELECT id FROM trivia WHERE user_id=?", (user_id,)) as cur:
-                row = await cur.fetchone()
-            if row:
-                col = "correct" if correct else "wrong"
-                await db.execute(f"UPDATE trivia SET {col}={col}+1 WHERE user_id=?", (user_id,))
-            else:
-                await db.execute("INSERT INTO trivia (user_id,correct,wrong) VALUES (?,?,?)",
-                                 (user_id, 1 if correct else 0, 0 if correct else 1))
+            await db.execute(
+                "INSERT INTO trivia (user_id,correct,wrong) VALUES (?,?,?) "
+                "ON CONFLICT(user_id) DO UPDATE SET correct=correct+excluded.correct,wrong=wrong+excluded.wrong",
+                (user_id, 1 if correct else 0, 0 if correct else 1),
+            )
             await db.commit()
 
     async def set_active_trivia(self, channel_id: int, asker_id: int, question: str, answer: str, source_note: str = ""):

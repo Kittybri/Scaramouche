@@ -163,8 +163,15 @@ _META_TAG_RE = re.compile(
     r"\[\s*(?:sent\s+(?:a\s+|an\s+)?)?(?:voice\s+message|voice\s+note|voice|image|video|audio|attachment)\s*\]",
     re.IGNORECASE,
 )
-# single-asterisk spans on one line: *smirks*. Bold (**x**), bullets ("* x") and maths ("2 * 3") are left alone.
-_ASTERISK_ACTION_RE = re.compile(r"(?<![*\w])\*(?![\s*])[^*\n]{1,200}?(?<!\s)\*(?![*\w])")
+# single-asterisk spans on one line: *smirks*. Bold (**x**), bullets ("* x") and maths ("2 * 3") are never matched.
+# A match is only *deleted* when it reads like a stage direction (see _is_stage_direction); emphasis such as
+# "I do *not* care" is italic markdown and has to survive, because dropping the word flips the meaning.
+_ASTERISK_ACTION_RE = re.compile(r"(?<![*\w])\*(?![\s*])([^*\n]{1,200}?)(?<!\s)\*(?![*\w])")
+_STAGE_START_RE = re.compile(rf"(?:{_STAGE_BODY}|{_ADVERBS})", re.IGNORECASE)
+_SUBJECT_LED_RE = re.compile(r"(?:he|she|they|scaramouche|the\s+balladeer)\s+\w", re.IGNORECASE)
+_INTERJECTIONS = frozenset({"hmph", "tch", "tsk", "ugh"})
+_SENTENCE_END_CHARS = ".!?…:;"
+_CLOSING_CHARS = "\"”’)]"
 _PAREN_ACTION_RE = re.compile(rf"\(\s*(?:{_STAGE_BODY}|{_ADVERBS})\s*\)", re.IGNORECASE)
 _BRACKET_ACTION_RE = re.compile(rf"\[\s*(?:{_STAGE_BODY}|{_ADVERBS})\s*\]", re.IGNORECASE)
 _SPEECH_TAG_RE = re.compile(
@@ -181,7 +188,8 @@ def _tidy(text: str) -> str:
     text = re.sub(r"[ \t]{2,}", " ", text)
     text = re.sub(r" *\n *", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
-    text = re.sub(r"[ \t]+([,.;:!?])", r"\1", text)
+    # (not right after "<@": removing the blank in "<@ !7>" would build a user mention out of inert text)
+    text = re.sub(r"(?<!<@)[ \t]+([,.;:!?])", r"\1", text)
     text = text.strip()
     text = re.sub(r"^[\s,;]+", "", text)
     if re.match(r"\.(?!\.)", text):
@@ -189,12 +197,60 @@ def _tidy(text: str) -> str:
     return text
 
 
+def _starts_sentence(text: str, index: int) -> bool:
+    """Is ``text[index]`` at the start of a line or sentence (only blanks, or sentence punctuation, before it)?"""
+    i = index - 1
+    while i >= 0 and text[i] in " \t":
+        i -= 1
+    if i < 0:
+        return True
+    last = text[i]
+    return last == "\n" or last in _SENTENCE_END_CHARS or last in _CLOSING_CHARS
+
+
+def _ends_sentence(text: str, index: int) -> bool:
+    """Does a new sentence (or the end of the line / text) follow ``text[index:]``?"""
+    j = index
+    while j < len(text) and text[j] in " \t":
+        j += 1
+    if j >= len(text) or text[j] == "\n" or text[j] in ".!?…":
+        return True
+    if j == index:  # glued to the next word or to a comma / dash: the sentence goes on
+        return False
+    following = text[j]
+    return following.isupper() or following.isdigit() or following in "\"“‘([<*"
+
+
+def _is_stage_direction(match: re.Match[str]) -> bool:
+    """Decide whether a ``*...*`` span is roleplay narration (True) or ordinary emphasis (False).
+
+    Stage directions are standalone ("*smirks* Pathetic.", "Fine. *takes a step back* Go on.") or start with an
+    action verb from the stage vocabulary. Emphasis sits inside a sentence ("I do *not* care", "This is *very
+    important*") and has to stay, so anything that is not clearly an action is left alone.
+    """
+    text, inner = match.string, match.group(1)
+    words = inner.split()
+    boundary = _starts_sentence(text, match.start()) and _ends_sentence(text, match.end())
+    if _STAGE_START_RE.match(inner):
+        if boundary or len(words) >= 2 or _SUBJECT_LED_RE.match(inner):
+            return True
+        first = re.match(r"[A-Za-z']+", inner)
+        word = first.group(0).lower() if first else ""
+        return word.endswith("s") or word in _INTERJECTIONS  # "I suppose *sighs* you may stay"
+    return boundary and len(words) >= 2 and inner[:1].islower()
+
+
+def _drop_stage_directions(match: re.Match[str]) -> str:
+    return "" if _is_stage_direction(match) else match.group(0)
+
+
 def strip_narration(text: str | None, *, strip_mentions: bool = False, keep_if_empty: bool = True) -> str:
     """Remove roleplay narration (``*smirks*``, ``(sighs)``, ``[he scoffs]``, ``Scaramouche muttered,``).
 
     Ordinary content survives: ``**bold**``, ``f(x) = (x+1)^2``, citations like ``[1]``, URLs with
-    parentheses, bullet lists, and newlines. User mentions are kept unless ``strip_mentions`` is set;
-    ``sanitize_mentions`` validates them at send time.
+    parentheses, bullet lists, newlines and ``*emphasis*`` inside a sentence ("I do *not* care" keeps its
+    "not"). User mentions are kept unless ``strip_mentions`` is set; ``sanitize_mentions`` validates them at
+    send time.
 
     If the text was *nothing but* narration, ``keep_if_empty`` decides: True keeps its words without the markers
     (``*sigh*`` -> ``sigh``, fine for a chat message), False returns an empty string (nothing to speak aloud).
@@ -203,7 +259,7 @@ def strip_narration(text: str | None, *, strip_mentions: bool = False, keep_if_e
     if not original.strip():
         return ""
     cleaned = _META_TAG_RE.sub("", original)
-    cleaned = _ASTERISK_ACTION_RE.sub("", cleaned)
+    cleaned = _ASTERISK_ACTION_RE.sub(_drop_stage_directions, cleaned)
     cleaned = _PAREN_ACTION_RE.sub("", cleaned)
     cleaned = _BRACKET_ACTION_RE.sub("", cleaned)
     cleaned = _SPEECH_TAG_RE.sub(lambda m: " " if m.start() else "", cleaned)
@@ -298,17 +354,36 @@ def resolve_name_mentions(text: str, name_to_id: Mapping[str, int]) -> str:
     return "".join(out)
 
 
+_ROLE_MENTION_RE = re.compile(r"<@&\d+>")
+# First '@' of a run, possessive: linear on "@@@@..." and no word boundary, because Discord matches "@herewhat" too.
+_MASS_MENTION_RE = re.compile(r"(?<!@)@++(?=everyone|here)", re.IGNORECASE)
+
+
+def neutralize_mass_mentions(text: str | None) -> str:
+    """Defuse ``@everyone`` / ``@here`` and role mentions, the pings nobody should trigger through the bot.
+
+    A removed role mention becomes a space, never nothing: deleting it could glue its neighbours into a new
+    mention (``<@&<@&1>1>`` would turn back into ``<@&1>``).
+    """
+    if not text:
+        return ""
+    text = _ROLE_MENTION_RE.sub(" ", text)
+    return _MASS_MENTION_RE.sub("", text)
+
+
 def sanitize_mentions(text: str, valid_user_ids: Iterable[int] | None, *, max_mentions: int = 2) -> str:
     """Make a model-written reply safe to send.
 
     * ``@everyone`` / ``@here`` are neutralised, role and unknown-user mentions are removed;
     * only real members (``valid_user_ids``) stay mentioned, at most ``max_mentions`` of them.
+
+    Every pass is a single linear scan and replaces a removed mention by a space, so no input can rebuild a
+    mention out of the pieces that are left (``<@<@7>7>``).
     """
     if not text:
         return ""
     valid = {int(uid) for uid in (valid_user_ids or [])}
-    text = re.sub(r"@(everyone|here)\b", r"\1", text, flags=re.IGNORECASE)
-    text = re.sub(r"<@&\d+>", "", text)
+    text = neutralize_mass_mentions(text)
     kept = 0
 
     def _user(match: re.Match[str]) -> str:
@@ -317,7 +392,7 @@ def sanitize_mentions(text: str, valid_user_ids: Iterable[int] | None, *, max_me
         if uid in valid and kept < max_mentions:
             kept += 1
             return f"<@{uid}>"
-        return ""
+        return " "
 
     text = _USER_MENTION_RE.sub(_user, text)
     return _tidy(text)
