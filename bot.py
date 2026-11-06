@@ -18,7 +18,6 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from memory import Memory
 from narration import chunk_text, limit_user_mentions, strip_narration as _strip_stage_directions
-from safety import CRISIS_CONTEXT_LINE, CRISIS_REPLY, CRISIS_REPLY_COOLDOWN_SECONDS, CRISIS_WINDOW_SECONDS, detect_crisis
 import secrets
 from voice_handler import get_audio
 from character_vision import ask_character_bot, vision_exhausted_remaining, vision_is_exhausted
@@ -920,28 +919,6 @@ MESSAGE_CHAR_LIMIT = 1900  # Discord refuses messages over 2000 characters; long
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None, allowed_mentions=BOT_ALLOWED_MENTIONS)
 mem = Memory("scaramouche")
 BOT_NAME = "scaramouche"
-_crisis_until: dict[int, float] = {}   # user id -> end of the window after a self-harm message
-_crisis_replied: dict[int, float] = {}  # user id -> when the resources were last sent (one per cooldown)
-
-
-def _in_crisis(user_id) -> bool:
-    return bool(user_id) and _crisis_until.get(user_id, 0) > time.time()
-
-
-async def _screen_for_crisis(message, content: str, *, direct: bool) -> bool:
-    """Safety first: someone who says they may hurt themselves gets real resources, never the persona. Messages that
-    are not aimed at the bot are screened too: nothing is pushed at them, but no joke lands on them either (the crisis
-    window keeps milestones, greetings and mockery away for a while). True means the caller stops there."""
-    if not (content and detect_crisis(content)):
-        return False
-    uid = message.author.id
-    now = time.time()
-    _crisis_until[uid] = now + CRISIS_WINDOW_SECONDS
-    if direct and now - _crisis_replied.get(uid, 0) >= CRISIS_REPLY_COOLDOWN_SECONDS:
-        _crisis_replied[uid] = now
-        await _guarded_message_reply(message, CRISIS_REPLY, mention_author=False)
-    return True
-
 PARTNER_NAME = "wanderer"
 PARTNER_PAIR_KEY = "scaramouche::wanderer"
 BOT_RARE_PHRASES = RARE_PHRASES[BOT_NAME]
@@ -3877,8 +3854,6 @@ async def get_response(user_id, channel_id, user_message, user, display_name,
         parts = [f"mention:{author_mention}",f"name:{display_name}",
                  f"MOOD:{mood}({mood_label(mood)})",f"AFFECTION:{affection}",
                  f"TRUST:{trust}",date_ctx,f"len:{hint}"]
-        if _in_crisis(user_id):
-            parts.insert(0, CRISIS_CONTEXT_LINE)  # no mockery, threats or escalation for a while after a crisis message
         if user and (user.get("affection_ever_maxed") or anger > 0):
             parts.append(f"ANGER:{anger}/100|{scara_anger_label(anger)}")
             if anger_repair_active and anger_repair_instruction:
@@ -5535,8 +5510,6 @@ async def _handle_message_pipeline(message):
             message.reference.resolved.author == bot.user
         )
         direct_to_me_early = bool(is_dm or mentioned_early or is_reply_early)
-        if await _screen_for_crisis(message, content, direct=direct_to_me_early):
-            return
         if _should_suppress_ambient_reply(is_dm, direct_to_me_early):
             print(f"[GROQ] Ambient reply suppressed while exhausted ({ai.exhausted_remaining()}s remaining)")
             return
@@ -5545,17 +5518,16 @@ async def _handle_message_pipeline(message):
             await _guarded_message_reply(message, status_reply, mention_author=False)
             return
 
-        # Milestone / anniversary checks (not while someone is inside the crisis window)
-        crisis_quiet = _in_crisis(message.author.id)
+        # Milestone / anniversary checks
         try:
             count, milestone = await mem.increment_message_count(message.author.id)
-            if milestone and not crisis_quiet:
+            if milestone:
                 msg = await qai(f"You've had {count} messages with {message.author.display_name}. Acknowledge while pretending you weren't counting. 1-2 sentences.",150)
                 await _guarded_channel_send(message.channel, f"{message.author.mention} {msg}"); return
         except Exception as e: log_error("on_message/milestone", e)
 
         try:
-            if not crisis_quiet and await mem.check_anniversary(message.author.id):
+            if await mem.check_anniversary(message.author.id):
                 days_since = int((time.time()-(user.get("first_seen") or time.time()))/86400)
                 msg = await qai(f"It's been about {days_since//365} year(s) since you first spoke with {message.author.display_name}. React — you weren't counting.",180)
                 await _guarded_channel_send(message.channel, f"{message.author.mention} {msg}")
@@ -5565,7 +5537,7 @@ async def _handle_message_pipeline(message):
         # Morning/night greeting
         try:
             hour = _user_local_hour(user)
-            if (6<=hour<=10 or 22<=hour<=23) and romance and not crisis_quiet:
+            if (6<=hour<=10 or 22<=hour<=23) and romance:
                 if await mem.should_greet(message.author.id):
                     gtype = "morning" if 6<=hour<=10 else "late night"
                     msg = await qai(f"It's {gtype}. {message.author.display_name} appeared. Send a {gtype} message in denial about why. 1-2 sentences.",120)

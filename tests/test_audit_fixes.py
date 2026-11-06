@@ -39,7 +39,6 @@ import discord  # noqa: E402
 
 import memory  # noqa: E402
 import narration  # noqa: E402
-import safety  # noqa: E402
 import video_render_worker as worker  # noqa: E402
 import bot  # noqa: E402
 
@@ -165,69 +164,6 @@ class NarrationTests(unittest.TestCase):
         self.assertGreater(len(pieces), 1)
         self.assertTrue(all(len(piece) <= 2000 for piece in pieces))
         self.assertEqual(" ".join(pieces).split(), text.split())
-
-
-# ── crisis detection ─────────────────────────────────────────────────────────
-class CrisisDetectionTests(unittest.TestCase):
-    CRISIS = (
-        "I'm suicidal", "thinking about self-harm again", "I keep killing myself slowly", "I want to end my life",
-        "kms", "honestly kms", "k i l l myself", "su1c1dal", "i want to kiiiill myself", "kill\u200bmyself",
-        "ki\u200bll myself", "i want to killmyself", "I want to die", "I don't want to live anymore",
-        "end\u200bmy life", "i want to\u200bdie",  # a zero-width character standing in for a space
-    )
-    EVERYDAY = (
-        "this boss fight is killing me lol", "The KMS server is down", "we walked 5 kms today", "I killed it at the gym",
-        "that joke killed me", "kms activation key", "I'm dying of laughter", "I cut myself shaving",
-        "I hurt myself at the gym", "suicide squad was fine",
-    )
-
-    def test_crisis_phrasings_are_recognised(self):
-        for text in self.CRISIS:
-            with self.subTest(text=text):
-                self.assertTrue(safety.detect_crisis(text))
-
-    def test_everyday_text_is_not_an_emergency(self):
-        for text in self.EVERYDAY:
-            with self.subTest(text=text):
-                self.assertFalse(safety.detect_crisis(text))
-
-
-class CrisisScreeningTests(unittest.IsolatedAsyncioTestCase):
-    async def asyncSetUp(self):
-        for name, value in (("DISCORD_SEND_MIN_INTERVAL_S", 0), ("_remember_recent_message", lambda sent: None)):
-            patcher = mock.patch.object(bot, name, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
-        bot._crisis_until.clear()
-        bot._crisis_replied.clear()
-        self.addCleanup(bot._crisis_until.clear)
-        self.addCleanup(bot._crisis_replied.clear)
-
-    @staticmethod
-    def message(uid: int):
-        return NS(id=uid * 10, author=NS(id=uid), channel=NS(id=777), reply=AsyncMock(return_value=NS(id=1)))
-
-    async def test_crisis_message_to_the_bot_gets_resources_once_per_cooldown(self):
-        first = self.message(42)
-        self.assertTrue(await bot._screen_for_crisis(first, "I want to end my life", direct=True))
-        first.reply.assert_awaited_once()
-        self.assertEqual(first.reply.await_args.args[0], safety.CRISIS_REPLY)
-        self.assertTrue(bot._in_crisis(42))
-        second = self.message(42)
-        self.assertTrue(await bot._screen_for_crisis(second, "i really want to die", direct=True))
-        second.reply.assert_not_awaited()  # still handled (no persona reply), but no second copy of the resources
-
-    async def test_unaddressed_crisis_message_is_not_answered_but_quiets_the_bot(self):
-        msg = self.message(43)
-        self.assertTrue(await bot._screen_for_crisis(msg, "kms", direct=False))
-        msg.reply.assert_not_awaited()
-        self.assertTrue(bot._in_crisis(43))
-
-    async def test_ordinary_message_passes_through(self):
-        msg = self.message(44)
-        self.assertFalse(await bot._screen_for_crisis(msg, "this boss fight is killing me lol", direct=True))
-        msg.reply.assert_not_awaited()
-        self.assertFalse(bot._in_crisis(44))
 
 
 # ── render worker ────────────────────────────────────────────────────────────
