@@ -384,6 +384,9 @@ class AdultModeTests(BotTestCase):
         romance = {**user, "romance_mode": True, "adult_confirmed": True}
         self.assertIn("Unfiltered Romance — Kai", bot.build_system(romance, "Kai", allow_nsfw=True))
         self.assertNotIn("Unfiltered", bot.build_system(romance, "Kai"))
+        for prompt in (bot.build_system({**user, "adult_confirmed": True}, allow_nsfw=True),
+                       bot.build_system(romance, "Kai", allow_nsfw=True)):
+            self.assertIn("under 18, none of this applies", prompt)
 
     def test_only_dms_and_age_restricted_channels_allow_it(self):
         guild = NS(id=1)
