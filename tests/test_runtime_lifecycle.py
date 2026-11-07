@@ -343,6 +343,7 @@ def test_one_reminder_failure_does_not_block_the_next(monkeypatch):
     memory = SimpleNamespace(
         get_due_reminders=AsyncMock(return_value=reminders),
         get_scene_state=AsyncMock(return_value=None),
+        mark_reminder_done=AsyncMock(),
     )
     monkeypatch.setattr(runtime, "mem", memory)
     monkeypatch.setattr(runtime.HOME, "tick", AsyncMock())
@@ -353,6 +354,8 @@ def test_one_reminder_failure_does_not_block_the_next(monkeypatch):
     )
     run(runtime.reminder_checker.coro())
     channel.send.assert_awaited_once_with("<@7> Second reminder")
+    # the timed-out one is not lost: it stays pending and is tried again on the next pass
+    memory.mark_reminder_done.assert_awaited_once_with(2)
 
 
 def test_provider_rotation_attempts_each_key_once(monkeypatch):

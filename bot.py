@@ -2826,6 +2826,27 @@ async def status_rotation():
     except discord.HTTPException as exc:
         logger.warning("status rotation Discord failure", extra={"error_category": type(exc).__name__})
 
+async def _deliver_due_reminder(r) -> None:
+    """Send one due reminder. Raises discord.NotFound / Forbidden when it can never be delivered, and other Discord
+    or network errors when it is worth trying again."""
+    u = await bot.fetch_user(r["user_id"])
+    ch = bot.get_channel(r["channel_id"])
+    if ch is None:
+        # not in the cache (a DM channel never is after a restart): ask Discord; if the channel is gone or closed to
+        # him, remind them in a DM instead of dropping it
+        try:
+            ch = await bot.fetch_channel(r["channel_id"])
+        except (discord.NotFound, discord.Forbidden):
+            ch = await u.create_dm()
+    scene = describe_scene_state(await mem.get_scene_state(r["channel_id"]))
+    msg = await qai(
+        f"Remind {u.display_name} about: '{r['reminder']}'. "
+        f"Current channel scene: {scene or 'none'}. Make it feel like a pointed callback, not a sterile alarm. 1-2 sentences.",
+        180,
+    )
+    await ch.send(f"{u.mention} {(msg or '').strip() or r['reminder']}")
+
+
 @tasks.loop(seconds=30)
 async def reminder_checker():
     try:
@@ -2844,35 +2865,30 @@ async def reminder_checker():
         logger.warning("reminder query failed", extra={"error_category": type(exc).__name__})
         return
     for r in reminders:
+        # A reminder is finished once it is sent or can never be sent; Discord or network trouble leaves it pending
+        # for the next pass (it used to be marked done before sending, so a failure lost it)
         try:
-            ch = bot.get_channel(r["channel_id"])
-            u = await bot.fetch_user(r["user_id"])
-            if not ch or not u:
-                logger.info("reminder target unavailable", extra={"reminder_id": r.get("id")})
-                continue
-            scene = describe_scene_state(await mem.get_scene_state(r["channel_id"]))
-            msg = await qai(
-                f"Remind {u.display_name} about: '{r['reminder']}'. "
-                f"Current channel scene: {scene or 'none'}. Make it feel like a pointed callback, not a sterile alarm. 1-2 sentences.",
-                180,
-            )
-            await ch.send(f"{u.mention} {msg}")
+            await _deliver_due_reminder(r)
         except asyncio.CancelledError:
             raise
         except (discord.Forbidden, discord.NotFound) as exc:
             logger.warning("reminder delivery unavailable", extra={
                 "reminder_id": r.get("id"), "error_category": type(exc).__name__,
             })
-        except discord.HTTPException as exc:
-            logger.warning("reminder Discord failure", extra={
+        except (discord.HTTPException, aiohttp.ClientError, OSError, TimeoutError, asyncio.TimeoutError,
+                GroqError) as exc:
+            logger.warning("reminder Discord or provider failure; will retry", extra={
                 "reminder_id": r.get("id"), "error_category": type(exc).__name__,
             })
-        except (sqlite3.Error, OSError, TimeoutError, GroqError) as exc:
-            logger.warning("reminder operational failure", extra={
-                "reminder_id": r.get("id"), "error_category": type(exc).__name__,
-            })
+            continue
         except Exception as exc:
             logger.exception("unexpected reminder failure", extra={
+                "reminder_id": r.get("id"), "error_category": type(exc).__name__,
+            })
+        try:
+            await mem.mark_reminder_done(r["id"])
+        except sqlite3.Error as exc:
+            logger.warning("reminder completion failed", extra={
                 "reminder_id": r.get("id"), "error_category": type(exc).__name__,
             })
 
@@ -3701,8 +3717,11 @@ async def _handle_pre_response_ownership(message, interaction, prepared):
 
     try:
         if interaction.allows("summary") and await mem.needs_summary(prepared.user_id):
-            # The summary is used in server replies too, so it is written from server messages only.
-            recent = await mem.get_recent_messages(prepared.user_id, 30, public_only=True)
+            # The summary is used in server replies too, so it is written only from channels everyone in a server can
+            # read (not DMs or private channels).
+            recent = await mem.get_recent_messages(
+                prepared.user_id, 30, public_only=True, channel_ids=_public_channel_ids(),
+            )
             sample = " | ".join(recent[:20])[:800]
             summary = await qai(
                 f"Summarize your relationship with {message.author.display_name} based on: "
@@ -4112,11 +4131,17 @@ async def _build_normal_response_context(message, interaction, prepared):
                 parts.append(f"RIVAL:{rival.display_name}")
         last_statement = prepared.user.get("last_statement")
         if last_statement and len(prepared.content) > 20 and random.random() < .08:
-            parts.append(f'CONTRADICTION:"{last_statement[:100]}"')
+            # their latest message can be from a DM or a private channel: in a server, only quote it if it was said
+            # where these readers can read it
+            if message.guild is None or await _said_where_audience_can_read(
+                prepared.user_id, last_statement, message.channel,
+            ):
+                parts.append(f'CONTRADICTION:"{last_statement[:100]}"')
         if prepared.user.get("trust", 0) > 30 and random.random() < .06:
             nice_messages = [
                 item for item in await mem.get_recent_messages(
                     prepared.user_id, 10, guild_id=message.guild.id if message.guild else None,
+                    channel_ids=_audience_channel_ids(message.channel, message.guild) if message.guild else None,
                 )
                 if any(keyword in item.lower() for keyword in NICE_KW)
             ]
@@ -4510,15 +4535,70 @@ async def safe_reply(ctx, text):
     except Exception as e: log_error("safe_reply", e)
 
 
+def _everyone_can_read(channel) -> bool:
+    """A server text channel, voice-channel chat or public thread that the server's @everyone role can read."""
+    guild = getattr(channel, "guild", None)
+    if guild is None:
+        return False
+    try:
+        if isinstance(channel, discord.Thread):
+            if channel.is_private():
+                return False
+            channel = channel.parent
+            if channel is None:
+                return False
+        return bool(channel.permissions_for(guild.default_role).view_channel)
+    except Exception:
+        return False
+
+
+def _audience_channel_ids(channel, guild=None) -> set[int]:
+    """Channels whose messages may be repeated in ``channel`` without showing its readers anything they could not
+    already read there: the channel itself and every channel or thread of its server (``guild`` when the channel
+    object does not say) that @everyone can read. (Scoping by server alone let what someone said in a staff-only
+    channel be quoted in a public one.)"""
+    guild = getattr(channel, "guild", None) or guild
+    if guild is None or channel is None:
+        return set()
+    ids = {channel.id}
+    for other in [*getattr(guild, "channels", ()), *getattr(guild, "threads", ())]:
+        if _everyone_can_read(other):
+            ids.add(other.id)
+    return ids
+
+
+def _public_channel_ids(*, member_id: int | None = None) -> set[int]:
+    """Channels @everyone can read, in every server the bot is in (or only the servers ``member_id`` is in)."""
+    ids: set[int] = set()
+    for guild in bot.guilds:
+        if member_id is not None and guild.get_member(member_id) is None:
+            continue
+        for channel in [*guild.channels, *guild.threads]:
+            if _everyone_can_read(channel):
+                ids.add(channel.id)
+    return ids
+
+
+async def _said_where_audience_can_read(user_id: int, text: str, channel) -> bool:
+    """True when ``text`` is one of the person's recent messages in a channel that ``channel``'s readers can read."""
+    recent = await mem.get_recent_messages(user_id, 20, channel_ids=_audience_channel_ids(channel))
+    return any((item or "")[:200] == (text or "")[:200] for item in recent)
+
+
 async def _visible_messages(ctx, user_id: int, limit: int) -> list[str]:
     """Messages a command may quote or profile in front of the people who can see ``ctx``: in a server only what
-    that person said in this server (never their DMs with the bot or other servers); in a DM, your own messages
-    in full, but somebody else's only from server channels."""
+    that person said in this channel or in channels everyone in the server can read (never DMs, other servers or
+    private channels); in a DM, your own messages in full, but somebody else's only from channels everyone can read
+    in the servers you are in."""
     if ctx.guild is not None:
-        return await mem.get_recent_messages(user_id, limit, guild_id=ctx.guild.id)
+        return await mem.get_recent_messages(
+            user_id, limit, guild_id=ctx.guild.id, channel_ids=_audience_channel_ids(ctx.channel, ctx.guild),
+        )
     if user_id == ctx.author.id:
         return await mem.get_recent_messages(user_id, limit)
-    return await mem.get_recent_messages(user_id, limit, public_only=True)
+    return await mem.get_recent_messages(
+        user_id, limit, public_only=True, channel_ids=_public_channel_ids(member_id=ctx.author.id),
+    )
 
 async def safe_send(ctx, text):
     try: await ctx.send(text)

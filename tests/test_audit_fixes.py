@@ -166,6 +166,19 @@ async def test_trivia_keeps_its_answer_tag(runtime, monkeypatch, memory):
 
 
 # ── privacy ──────────────────────────────────────────────────────────────────
+EVERYONE = NS(id=0, name="@everyone")
+
+
+def _server(guild_id, *, public=(), private=()):
+    """A server whose @everyone can read the ``public`` channels but not the ``private`` ones."""
+    guild = NS(id=guild_id, default_role=EVERYONE, channels=[], threads=[], get_member=lambda uid: None)
+    for channel_id in (*public, *private):
+        readable = channel_id in public
+        guild.channels.append(NS(id=channel_id, guild=guild,
+                                 permissions_for=lambda role, readable=readable: NS(view_channel=readable)))
+    return guild
+
+
 async def _seed_victim(memory, victim=222):
     await memory.upsert_user(victim, "victim#1", "Victim")
     await memory.track_channel(500, 50)   # this server
@@ -196,15 +209,19 @@ async def test_profiling_commands_never_read_dms_or_other_servers(runtime, monke
         return "A report."
 
     monkeypatch.setattr(runtime, "qai", fake_qai)
+    await memory.track_channel(501, 50)   # a staff-only channel in this server
+    await memory.add_message(222, 501, "user", "STAFF ROOM: line said in a private channel")
     author = NS(id=111, display_name="Asker", mention="<@111>", name="asker")
     victim = NS(id=222, display_name="Victim", mention="<@222>", name="victim")
-    ctx = NS(author=author, guild=NS(id=50), channel=NS(id=500), reply=AsyncMock(), send=AsyncMock(), message=NS(id=1))
+    ctx = NS(author=author, guild=_server(50, public=(500,), private=(501,)), channel=NS(id=500),
+             reply=AsyncMock(), send=AsyncMock(), message=NS(id=1))
     for name in ("blackmail", "stalk", "judge", "possess", "duel"):
         prompts.clear()
         await runtime.bot.get_command(name).callback(ctx, victim)
         seen = " ".join(prompts)
         assert "PRIVATE DM" not in seen, name
         assert "different server" not in seen, name
+        assert "STAFF ROOM" not in seen, name   # a private channel is not quoted in a public one
         if name != "duel":
             assert "public line said in this server" in seen, name
 
@@ -396,3 +413,134 @@ async def test_a_post_that_may_have_happened_is_not_sent_twice():
     client = _client([_FakeResponse(503), _FakeResponse(200, {"ok": True})], log)
     assert await client.request("GET", "https://example.test/events") == {"ok": True}
     assert log == ["GET", "GET"]
+
+
+# ── what a server reply may bring up (second audit) ─────────────────────────
+def test_the_audience_is_this_channel_plus_what_everyone_can_read(runtime):
+    guild = _server(50, public=(500, 502), private=(501,))
+    assert runtime._audience_channel_ids(NS(id=500, guild=guild)) == {500, 502}
+    assert runtime._audience_channel_ids(NS(id=501, guild=guild)) == {500, 501, 502}  # the staff room may hear its own
+    assert runtime._audience_channel_ids(NS(id=500), guild) == {500, 502}             # channel object without .guild
+    assert runtime._audience_channel_ids(None) == set()
+
+
+@async_test
+async def test_a_last_statement_is_only_quoted_where_it_was_readable(runtime, monkeypatch, memory):
+    await _seed_victim(memory)
+    await memory.track_channel(501, 50)
+    await memory.add_message(222, 501, "user", "STAFF ROOM: line said in a private channel")
+    monkeypatch.setattr(runtime, "mem", memory)
+    guild = _server(50, public=(500,), private=(501,))
+    public, staff = NS(id=500, guild=guild), NS(id=501, guild=guild)
+    assert await runtime._said_where_audience_can_read(222, "public line said in this server", public)
+    assert not await runtime._said_where_audience_can_read(222, "PRIVATE DM: I failed my exams and lied about it", public)
+    assert not await runtime._said_where_audience_can_read(222, "STAFF ROOM: line said in a private channel", public)
+    assert await runtime._said_where_audience_can_read(222, "STAFF ROOM: line said in a private channel", staff)
+
+
+# ── reminders are not lost ───────────────────────────────────────────────────
+class _ReminderChannel:
+    def __init__(self, channel_id, error=None):
+        self.id, self.error, self.sent = channel_id, error, []
+
+    async def send(self, text, **kwargs):
+        if self.error:
+            raise self.error
+        self.sent.append(text)
+
+
+def _http_error(cls, status):
+    return getattr(discord, cls)(NS(status=status, reason="test"), "test")
+
+
+async def _run_reminders(runtime, monkeypatch, memory, *, cached=None, fetched=None, user_error=None,
+                         text="Pathetic. Water.", dm=None):
+    monkeypatch.setattr(runtime, "mem", memory)
+    monkeypatch.setattr(runtime.HOME, "tick", AsyncMock())
+    monkeypatch.setattr(runtime, "qai", AsyncMock(return_value=text))
+    monkeypatch.setattr(runtime.bot, "get_channel", lambda channel_id: cached)
+    monkeypatch.setattr(runtime.bot, "fetch_channel", fetched or AsyncMock(side_effect=_http_error("NotFound", 404)))
+    user = NS(id=7, display_name="User", mention="<@7>", create_dm=AsyncMock(return_value=dm))
+    fetch_user = AsyncMock(side_effect=user_error) if user_error else AsyncMock(return_value=user)
+    monkeypatch.setattr(runtime.bot, "fetch_user", fetch_user)
+    await runtime.reminder_checker.coro()
+
+
+async def _pending(memory):
+    return [r["reminder"] for r in await memory.get_due_reminders()]
+
+
+@async_test
+async def test_a_reminder_in_an_uncached_channel_is_still_delivered(runtime, monkeypatch, memory):
+    await memory.add_reminder(7, 77, "drink water", 0)
+    channel = _ReminderChannel(77)
+    await _run_reminders(runtime, monkeypatch, memory, fetched=AsyncMock(return_value=channel))
+    assert channel.sent == ["<@7> Pathetic. Water."] and await _pending(memory) == []
+
+
+@async_test
+async def test_a_reminder_whose_channel_is_gone_goes_to_their_dms(runtime, monkeypatch, memory):
+    await memory.add_reminder(7, 77, "drink water", 0)
+    dm = _ReminderChannel(5)
+    await _run_reminders(runtime, monkeypatch, memory, dm=dm)
+    assert dm.sent == ["<@7> Pathetic. Water."] and await _pending(memory) == []
+
+
+@async_test
+async def test_a_failed_send_is_tried_again_later(runtime, monkeypatch, memory):
+    await memory.add_reminder(7, 77, "drink water", 0)
+    await _run_reminders(runtime, monkeypatch, memory, cached=_ReminderChannel(77, error=_http_error("HTTPException", 503)))
+    assert await _pending(memory) == ["drink water"]  # it used to be marked done before sending and was lost
+    channel = _ReminderChannel(77)
+    await _run_reminders(runtime, monkeypatch, memory, cached=channel)
+    assert channel.sent == ["<@7> Pathetic. Water."] and await _pending(memory) == []
+
+
+@async_test
+async def test_an_undeliverable_reminder_is_dropped_not_retried_forever(runtime, monkeypatch, memory):
+    await memory.add_reminder(7, 77, "drink water", 0)
+    await _run_reminders(runtime, monkeypatch, memory, cached=_ReminderChannel(77), user_error=_http_error("NotFound", 404))
+    assert await _pending(memory) == []
+
+
+@async_test
+async def test_an_empty_reminder_line_still_reminds(runtime, monkeypatch, memory):
+    await memory.add_reminder(7, 77, "drink water", 0)
+    channel = _ReminderChannel(77)
+    await _run_reminders(runtime, monkeypatch, memory, cached=channel, text="")
+    assert channel.sent == ["<@7> drink water"]
+
+
+# ── the gTTS fallback does not freeze the bot ────────────────────────────────
+def test_the_gtts_fallback_runs_off_the_event_loop(monkeypatch):
+    import sys
+    import time
+    import voice_handler
+
+    seen = {}
+
+    class SlowGTTS:
+        def __init__(self, text, lang="en", slow=False, timeout=None, **kwargs):
+            seen["timeout"] = timeout
+
+        def write_to_fp(self, fp):
+            time.sleep(0.25)  # a slow request to Google
+            fp.write(b"mp3")
+
+    monkeypatch.setitem(sys.modules, "gtts", NS(gTTS=SlowGTTS))
+
+    async def scenario():
+        started = time.perf_counter()
+        ticks = []
+
+        async def ticker():
+            await asyncio.sleep(0.02)
+            ticks.append(time.perf_counter() - started)
+
+        audio, _ = await asyncio.gather(voice_handler.generate_tts_gtts("hello"), ticker())
+        return audio, ticks[0]
+
+    audio, tick = asyncio.run(scenario())
+    assert audio == b"mp3"
+    assert tick < 0.2  # the 20 ms timer fired while the request was still running (it used to wait 250 ms)
+    assert seen["timeout"] == voice_handler.GTTS_REQUEST_TIMEOUT_S

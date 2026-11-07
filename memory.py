@@ -39,6 +39,14 @@ SHARED_DB_PATH = os.path.join(_data_dir, "shared_state.db")
 log = logging.getLogger(__name__)
 
 
+def _channel_filter(channel_ids, column: str = "channel_id") -> tuple[str, list[int]]:
+    """SQL fragment keeping only rows whose channel is in ``channel_ids`` (``None``: no filter)."""
+    if channel_ids is None:
+        return "", []
+    ids = sorted({int(channel_id) for channel_id in channel_ids})
+    return f" AND {column} IN ({','.join('?' * len(ids))})", ids
+
+
 class Memory:
     db_path: str = DB_PATH
     shared_db_path: str = SHARED_DB_PATH
@@ -1734,16 +1742,25 @@ class Memory:
 
     async def get_recent_messages(
         self, user_id: int, limit: int = 10, *, guild_id: int | None = None, public_only: bool = False,
+        channel_ids=None,
     ) -> list[str]:
         """A user's recent messages. ``guild_id`` limits them to that server's channels and ``public_only`` to any
-        server channel; either way DMs (and, with ``guild_id``, other servers) are left out. Use one of them whenever
-        the result can end up in front of other people."""
+        server channel; either way DMs (and, with ``guild_id``, other servers) are left out. ``channel_ids`` keeps
+        only messages sent in those channels (the ones the audience can read). Use these whenever the result can end
+        up in front of other people."""
+        if channel_ids is not None and not channel_ids:
+            return []
         join, extra, params = "", "", [user_id, self.bot_name]
         if guild_id is not None or public_only:
             join = " JOIN channels c ON c.channel_id=m.channel_id"
             if guild_id is not None:
                 extra = " AND c.guild_id=?"
                 params.append(guild_id)
+            else:
+                extra = " AND c.guild_id IS NOT NULL"  # only server channels are tracked; never count on that alone
+        channel_sql, channel_params = _channel_filter(channel_ids, column="m.channel_id")
+        extra += channel_sql
+        params.extend(channel_params)
         params.append(limit)
         async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute(
@@ -2051,13 +2068,17 @@ class Memory:
             await db.commit()
 
     async def get_due_reminders(self) -> list[dict]:
+        """Due reminders not delivered yet. They stay pending until ``mark_reminder_done``: they used to be marked
+        done before sending, so one whose channel was not cached (a DM after a restart) or whose send failed was lost."""
         async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             async with db.execute("SELECT id,user_id,channel_id,reminder FROM reminders WHERE due_ts<=? AND done=0", (time.time(),)) as cur:
                 rows = await cur.fetchall()
-            if rows:
-                await db.execute(f"UPDATE reminders SET done=1 WHERE id IN ({','.join('?'*len(rows))})", [r[0] for r in rows])
-                await db.commit()
         return [{"id":r[0],"user_id":r[1],"channel_id":r[2],"reminder":r[3]} for r in rows]
+
+    async def mark_reminder_done(self, reminder_id: int):
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
+            await db.execute("UPDATE reminders SET done=1 WHERE id=?", (reminder_id,))
+            await db.commit()
 
     # ── Channels ──────────────────────────────────────────────────────────────
     async def track_channel(self, channel_id: int, guild_id: int):

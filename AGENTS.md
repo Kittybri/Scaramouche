@@ -30,3 +30,21 @@ provider/model handling; command/help registration.
 ## Layout
 Keep existing production file locations. Flat modules are protected through this
 file, CODEOWNERS, runtime manifests, and tests; no folder migration is required.
+
+## Live branch and deployment (every agent: Claude, ChatGPT, Codex)
+- `fix/voice-live-followup` is the live branch. It always matches what runs on the Oracle VM. Fetch it first and
+  start every change from its latest commit, on a new branch.
+- The VM runs Python 3.9.25 and SQLite 3.34.1 with the packages already installed. Before merging, run the full
+  suite there (or under those versions). `tests/test_python39_compat.py` and `tests/test_sqlite334_compat.py` catch
+  the two kinds of breakage that have shipped before.
+- Merge into `fix/voice-live-followup` only by fast-forward or a normal merge. Never force-push it or rewrite its
+  history.
+- Deploy only a commit of `fix/voice-live-followup`, and only if it contains the commit that is running
+  (`git merge-base --is-ancestor <running-sha> <new-sha>`). If it does not, stop: deploying it would undo someone's
+  work.
+- Deploy the exact commit into a new release folder, take online SQLite backups, and point the bot's service at the
+  folder with a final-sorting systemd drop-in plus a `release-meta.env` holding BOT_RELEASE_SHA and
+  BOT_RELEASE_LABEL. Restart only the two bot services, never the connections/callback service. Then check service
+  status, journals, the process's working folder and `PRAGMA quick_check`. To roll back, move that drop-in aside,
+  reload systemd and restart the bot; do not restore databases for a code rollback.
+- Never edit code on the server, and do not install or change packages unless the owner asks.
