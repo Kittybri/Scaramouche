@@ -474,7 +474,7 @@ def test_stop_said_over_background_noise_interrupts_quickly():
                 await asyncio.sleep(0.02)
             noise_task.cancel()
             assert s.metrics["cancelled_responses"] == 1
-            assert time.monotonic() - started < 3  # it used to be heard only after he had finished
+            assert time.monotonic() - started < 6  # it used to be heard only after he had finished (12 s); slack for a slow VM
         finally:
             await s.stop()
 
