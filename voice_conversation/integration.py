@@ -18,6 +18,12 @@ from .session import Playback, Session
 from .speech import GroqSTT, Limits
 
 
+def _someone_speaking(session):
+    """Real speech in progress (Segmenter.speaking: noise frames alone do not hold greetings back)."""
+    speaking = getattr(session.segmenter, "speaking", None)
+    return bool(speaking()) if callable(speaking) else bool(session.segmenter.users)
+
+
 class VoiceConversation:
     def __init__(
         self, bot, mem, name, respond, tts, stt_key, owner_id=0, on_spoken=None, partner_id=0
@@ -96,6 +102,19 @@ class VoiceConversation:
             if self.sessions.get(gid) is session:
                 await self.leave(gid, announce=False)
 
+    async def failed_leave(self, gid, session, category):
+        """The session can no longer hear the channel: leave it and say so instead of sitting there deaf."""
+        if self.sessions.get(gid) is not session:
+            return
+        channel = getattr(getattr(session.backend, "vc", None), "channel", None)
+        await self.leave(gid, announce=False)
+        if channel is not None:
+            with contextlib.suppress(Exception):
+                await channel.send(
+                    "I stopped being able to hear this voice channel, so I left it. Use `!join` to bring me back.",
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+
     async def voice_state(self, member, before, after):
         if self.features:
             # A social-feature DB failure must never prevent a participant's
@@ -148,7 +167,7 @@ class VoiceConversation:
                 while session.active and self.sessions.get(member.guild.id) is session:
                     if getattr(getattr(member.voice, "channel", None), "id", None) != session.channel_id:
                         return
-                    if not session.busy() and not session.segmenter.users and session.jobs.empty():
+                    if not session.busy() and not _someone_speaking(session) and session.jobs.empty():
                         uid = session.initiator if session.initiator in session.participants else next(iter(session.participants), None)
                         if uid is None:
                             return
@@ -210,7 +229,7 @@ class VoiceConversation:
             try:
                 deadline = time.monotonic() + 20
                 while session.active and member.id in session.participants:
-                    if not session.busy() and not session.segmenter.users and session.jobs.empty():
+                    if not session.busy() and not _someone_speaking(session) and session.jobs.empty():
                         name = re.sub(r"[@#\x00-\x1f]", "", member.display_name)[:60].strip() or "you"
                         if self.name.lower() == "scaramouche":
                             lines = (
@@ -502,6 +521,7 @@ class VoiceConversation:
                     remember=remember,
                     notify=notify,
                     on_spoken_leave=lambda uid: self.spoken_leave(ctx.guild.id, session, uid),
+                    on_failed=lambda category: self.failed_leave(ctx.guild.id, session, category),
                     limits=Limits.from_env(),
                 )
                 if getattr(getattr(getattr(ctx.author, "voice", None), "channel", None), "id", None) == channel.id:

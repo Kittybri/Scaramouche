@@ -53,13 +53,31 @@ def setup(**kwargs):
     ("scaramouche", "scaramouche leave voice channel.", True),
     ("scaramouche", "Scaramouche, leave voice channel.", True),
     ("wanderer", "Wanderer leave voice channel", True),
-    ("scaramouche", "scara leave voice channel", False),
-    ("scaramouche", "hey scaramouche leave voice channel", False),
+    # the owner asked for natural phrases (2026-11-08): only the exact words above used to work
+    ("wanderer", "Wander leave voice channel", True),
+    ("scaramouche", "scara leave voice channel", True),
+    ("scaramouche", "hey scaramouche leave voice channel", True),
+    ("wanderer", "wanderer leave vc", True),
+    ("wanderer", "wanderer please leave voice channel", True),
+    ("scaramouche", "Scaramouche, leave the voice chat.", True),
+    ("scaramouche", "Scaramouch, leave the voice chat.", True),
+    ("scaramouche", "Leave the call, Scaramouche.", True),
+    ("scaramouche", "Scara, can you leave the VC?", True),
+    ("wanderer", "Wonderer, leave the voice channel.", True),
+    ("wanderer", "leave the voice chat", True),          # unnamed: every bot in the channel goes
+    # still not a leave request
     ("scaramouche", "wanderer leave voice channel", False),
-    ("wanderer", "wanderer leave vc", False),
-    ("wanderer", "wanderer please leave voice channel", False),
+    ("wanderer", "Scaramouche, leave the voice chat.", False),
+    ("scaramouche", "Scaramouche and Wanderer, leave the voice chat.", False),
+    ("scaramouche", "Scaramouche, don't leave the voice chat.", False),
+    ("scaramouche", "Why did Scaramouche leave the voice chat?", False),
+    ("scaramouche", "Scaramouche, are you going to leave?", False),
+    ("scaramouche", "Scaramouche, leave me alone.", False),
+    ("scaramouche", "I have to leave the voice chat soon.", False),
+    ("scaramouche", "Leave.", False),
+    ("wanderer", "Wander through the voice chat.", False),
 ])
-def test_spoken_leave_phrase_is_exact(name, spoken, expected):
+def test_spoken_leave_phrases(name, spoken, expected):
     assert is_spoken_leave_command(spoken, name) is expected
 
 

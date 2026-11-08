@@ -19,7 +19,7 @@ VOICE_HELP = (
     "Live voice: `!join [scaramouche|wanderer]` (alias `!listen`) or `/join`. "
     "End with `!leave [scaramouche|wanderer]`, `/leave`, or say 'Scara, leave voice channel'. "
     "A plain 'leave voice channel' asks both bots to leave. "
-    "In the VC, say exactly 'Scaramouche leave voice channel' or 'Wanderer leave voice channel'. "
+    "In the VC itself, natural requests work too: 'Scaramouche, leave the voice chat', 'Wanderer, leave the call'. "
     "If you are not in a VC, ask from its matching text channel; a server with only one accessible VC works too. Choose the bot's app for slash commands. "
     "You can also say 'Scara, join voice chat' or 'Wanderer, join the voice channel' "
     "in text or a short Discord voice note. "
