@@ -118,6 +118,12 @@ Defaults: 120ms speech onset, 240ms minimum utterance, 900ms trailing silence,
 320ms sustained natural barge-in, 12-second maximum utterance. Configure with
 `VOICE_SPEECH_START_MS`, `VOICE_SPEECH_MIN_MS`, `VOICE_SPEECH_END_MS`,
 `VOICE_BARGE_MS`, `VOICE_MAX_UTTERANCE_SECONDS`; invalid/unbounded values reject startup.
+A sentence also ends once the last 900ms are mostly quiet (`VOICE_ENDPOINT_SPEECH_RATIO`, default 0.35, the
+largest share of speech frames still counted as quiet), and audio counts as speech only with a dense 400ms
+stretch (`VOICE_MIN_SPEECH_DENSITY`, default 0.4). Replies are voiced piece by piece: the opening sentence on its
+own, each following piece synthesized while the previous one plays. Playback levels every clip to
+`VOICE_LOUDNESS_LUFS` (default -18; `off` disables it), and `VOICE_EMOTION_TAGS=off` turns off the Fish S2
+delivery cues and speed changes chosen from the voice state.
 Silence/noise does not create an STT job. A wall-clock flush handles Discord ceasing
 to send silence packets. Different speakers have separate audio buffers. Overlap
 delays replies; a bounded same-user continuation can be joined after cues such as

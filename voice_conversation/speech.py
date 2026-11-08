@@ -294,3 +294,19 @@ def chunks(text, size=320):
     if current:
         result.append(current)
     return result
+
+
+def spoken_pieces(text, opening=40, size=320):
+    """chunks(), with the opening voiced on its own: the first sentence (or the first few, up to `opening`
+    characters). He waited for a whole first chunk of 100 characters or more before saying anything; the pieces
+    after the opening are made while it plays."""
+    text = (text or "").strip()
+    sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+|\n+", text) if part.strip()]
+    head, count = "", 0
+    for count, sentence in enumerate(sentences, 1):
+        head = f"{head} {sentence}".strip()
+        if len(head) >= opening:
+            break
+    if len(head) < opening or len(head) > size or count == len(sentences):
+        return chunks(text, size)
+    return [head] + chunks(" ".join(sentences[count:]), size)

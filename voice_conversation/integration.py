@@ -489,6 +489,10 @@ class VoiceConversation:
                         text, user.get("mood", 0), user, voice_key=uid
                     )
 
+                async def mood_of(uid):
+                    user = await self.mem.get_user(uid) or {}
+                    return user.get("mood", 0)
+
                 async def remember(uid, text):
                     await self.mem.add_message(
                         uid, channel.id, "assistant", "[voice spoken] " + text
@@ -522,6 +526,7 @@ class VoiceConversation:
                     notify=notify,
                     on_spoken_leave=lambda uid: self.spoken_leave(ctx.guild.id, session, uid),
                     on_failed=lambda category: self.failed_leave(ctx.guild.id, session, category),
+                    mood_of=mood_of,
                     limits=Limits.from_env(),
                 )
                 if getattr(getattr(getattr(ctx.author, "voice", None), "channel", None), "id", None) == channel.id:

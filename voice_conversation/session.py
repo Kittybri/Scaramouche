@@ -4,17 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import io
+import os
 import queue
 import random
 import re
+import subprocess
 import time
 from collections import Counter, deque
 from difflib import SequenceMatcher
 from enum import Enum
 
 from . import names
-from .speech import Limits, Segmenter, chunks, is_phantom
+from .speech import Limits, Segmenter, is_phantom, spoken_pieces
 
 _INTERRUPT_ACK_TTS_TIMEOUT = 5.0
 _INTERRUPT_ACK_PLAYBACK_TIMEOUT = 8.0
@@ -33,6 +36,56 @@ def needs_immediate_voice_help(text: str) -> bool:
         r"crying|scared|panic|password|secret|911|999|112)\b",
         text or "", re.I,
     ))
+
+
+_INTERRUPTION_LINES = (
+    "Why did you interrupt me?",
+    "You couldn't wait until I finished?",
+    "Bold of you to cut me off. Go on.",
+)
+# Reactions are made this long after joining, once nothing else is being voiced (a join greeting goes first).
+_REACTION_WARMUP_S = 8.0
+
+FREE_LENGTH = "No artificial sentence limit."
+SHORT_LENGTH = (
+    "Keep this reply short, the way people talk: one to three sentences, unless they asked for a story or an "
+    "explanation."
+)
+
+
+def short_reply_odds(mood) -> float:
+    """Chance that a spoken reply is kept short: even at a neutral mood (0), curter the more irritated he is with
+    this person (0.8 at -10), more talkative the more pleased (0.2 at +10)."""
+    try:
+        mood = max(-10, min(10, int(mood or 0)))
+    except (TypeError, ValueError):
+        mood = 0
+    return 0.5 - 0.03 * mood
+
+
+@functools.lru_cache(maxsize=1)
+def level_options() -> str:
+    """FFmpeg output options that bring every clip to the same loudness (EBU R128), or "" if unavailable.
+
+    Fish clips came out at whatever loudness each one had, and the two bots differed. VOICE_LOUDNESS_LUFS sets the
+    target (default -18; "off" disables it). An ffmpeg without the loudnorm filter plays clips as before.
+    """
+    target = (os.getenv("VOICE_LOUDNESS_LUFS") or "-18").strip().lower()
+    if target in {"off", "none", "false", "no"}:
+        return ""
+    try:
+        lufs = max(-30.0, min(-10.0, float(target)))
+    except ValueError:
+        lufs = -18.0
+    try:
+        filters = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-filters"], capture_output=True, text=True, timeout=10
+        ).stdout
+    except Exception:
+        return ""
+    if " loudnorm " not in filters:
+        return ""
+    return f"-af loudnorm=I={lufs:g}:TP=-2:LRA=11"
 
 
 def is_interrupt_keyword(text: str, name: str) -> bool:
@@ -86,6 +139,7 @@ class State(str, Enum):
 class Playback:
     def __init__(self, vc):
         self.vc, self.done, self.source = vc, None, None
+        self.options = level_options()
 
     async def play(self, audio):
         import discord
@@ -94,7 +148,9 @@ class Playback:
             raise RuntimeError("playback_unavailable")
         loop = asyncio.get_running_loop()
         done = self.done = loop.create_future()
-        source = self.source = discord.FFmpegPCMAudio(io.BytesIO(audio), pipe=True)
+        source = self.source = discord.FFmpegPCMAudio(
+            io.BytesIO(audio), pipe=True, options=self.options or None
+        )
 
         def complete(error):
             if not done.done():
@@ -143,6 +199,7 @@ class Session:
         limits=Limits(),
         vad=None,
         on_failed=None,
+        mood_of=None,
     ):
         self.channel_id, self.initiator, self.name = channel_id, initiator, name.lower()
         self.backend, self.stt, self.playback = backend, stt, playback
@@ -154,6 +211,8 @@ class Session:
         )
         self.on_spoken_leave = on_spoken_leave
         self.on_failed = on_failed
+        self.mood_of = mood_of  # async uid -> his mood toward that person (-10..10), for reply length
+        self.reaction_audio = {}  # interruption reaction line -> audio made ahead of time
         self.stt_failures, self.stt_failing_since = 0, 0.0
         self.leave_requested = False
         self.leave_task = None
@@ -309,7 +368,31 @@ class Session:
         self.workers = [
             asyncio.create_task(self.receive_loop()),
             asyncio.create_task(self.transcribe_loop()),
+            asyncio.create_task(self.prepare_reactions()),
         ]
+
+    async def prepare_reactions(self):
+        """Make the interruption reactions ahead of time, one at a time while nothing else is being voiced.
+
+        They were made only at the moment he was cut off, so the reaction waited for speech synthesis (up to 5 s).
+        Without a prepared clip (too early, or synthesis failed) it is still made on the spot, as before.
+        """
+        await asyncio.sleep(_REACTION_WARMUP_S)
+        for line in _INTERRUPTION_LINES:
+            while self.active and (self.busy() or self.state != State.LISTENING):
+                await asyncio.sleep(0.5)
+            if not self.active:
+                return
+            try:
+                audio = await asyncio.wait_for(
+                    self.provider("tts", lambda: self.synthesize(self.initiator, line)), 20
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                return
+            if audio:
+                self.reaction_audio[line] = audio
 
     async def failure(self, category):
         self.metrics[category] += 1
@@ -635,7 +718,7 @@ class Session:
         if not self.current(generation, uid, epoch):
             return False
         self.state = State.SYNTHESIZING
-        audio = await asyncio.wait_for(
+        audio = self.reaction_audio.get(line) or await asyncio.wait_for(
             self.provider("tts", lambda: self.synthesize(uid, line)),
             _INTERRUPT_ACK_TTS_TIMEOUT,
         )
@@ -682,7 +765,16 @@ class Session:
     ):
         start = time.monotonic()
         self.completed, self.total = 0, 0
-        context = "Voice conversation: output spoken dialogue only; no narration or stage directions. No artificial sentence limit."
+        length = FREE_LENGTH
+        if self.mood_of and not feature_context and reply_override is None and audio_override is None:
+            try:
+                mood = await self.mood_of(uid)
+            except Exception:
+                mood = 0
+            short = random.random() < short_reply_odds(mood)
+            length = SHORT_LENGTH if short else FREE_LENGTH
+            self.metrics["short_replies" if short else "free_length_replies"] += 1
+        context = "Voice conversation: output spoken dialogue only; no narration or stage directions. " + length
         context += " " + feature_context
         interrupted = bool(self.interruption and self.interruption["user_id"] == uid)
         acknowledge = False
@@ -712,7 +804,7 @@ class Session:
                     "Do not repeat it or comment on the interruption again; answer the new utterance."
                 )
             self.interruption = None
-        reply_task = None
+        reply_task = upcoming = None
         try:
             if feature_kind and (
                 not self.feature_router
@@ -727,11 +819,7 @@ class Session:
             self.state = State.THINKING
             tick = time.monotonic()
             if acknowledge:
-                line = random.choice((
-                    "Why did you interrupt me?",
-                    "You couldn't wait until I finished?",
-                    "Bold of you to cut me off. Go on.",
-                ))
+                line = random.choice(_INTERRUPTION_LINES)
                 reply_task = asyncio.create_task(
                     self.provider("llm", lambda: self.respond(uid, text, context))
                 )
@@ -771,16 +859,25 @@ class Session:
             if not self.current(generation, uid, epoch):
                 self.metrics["dropped_stale_jobs"] += 1
                 return
-            pieces = chunks(reply[:12000])
+            pieces = spoken_pieces(reply[:12000])
             if not pieces:
                 self.decision("empty_response", uid)
             self.total = self.completed + len(pieces)
-            for part in pieces:
+
+            def voice(part):
+                return asyncio.ensure_future(
+                    self.provider("tts", lambda: self.synthesize(uid, part))
+                )
+
+            # Each piece used to be sent for synthesis only after the one before had finished playing, so he
+            # went quiet between pieces. The next piece is now made while the current one plays.
+            for index, part in enumerate(pieces):
                 if not self.current(generation, uid, epoch):
                     return
                 self.state = State.SYNTHESIZING
                 tick = time.monotonic()
-                audio = await self.provider("tts", lambda: self.synthesize(uid, part))
+                audio, upcoming = await (upcoming or voice(part)), None
+                # how long he waited, silent, for this piece
                 self.metrics["tts_latency_ms"] = round((time.monotonic() - tick) * 1000)
                 if not self.current(generation, uid, epoch):
                     self.metrics["dropped_stale_jobs"] += 1
@@ -791,6 +888,8 @@ class Session:
                     return
                 if not audio:
                     raise RuntimeError("tts_unavailable")
+                if index + 1 < len(pieces):
+                    upcoming = voice(pieces[index + 1])
                 self.state = State.BOT_SPEAKING
                 if not self.completed:
                     self.metrics["first_audio_ms"] = round(
@@ -830,6 +929,9 @@ class Session:
                 if not reply_task.done():
                     reply_task.cancel()
                 await asyncio.gather(reply_task, return_exceptions=True)
+            if upcoming is not None:
+                upcoming.cancel()
+                await asyncio.gather(upcoming, return_exceptions=True)
             if generation == self.generation and self.active:
                 self.state = State.LISTENING
 
