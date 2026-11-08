@@ -479,3 +479,59 @@ def test_stop_said_over_background_noise_interrupts_quickly():
             await s.stop()
 
     asyncio.run(check())
+
+
+# ── echo: his own voice coming back through someone's loudspeaker ────────────
+def test_his_own_words_from_a_loudspeaker_are_echo():
+    async def check():
+        s = make_session()
+        s.recent_outputs.extend(["you dare call me a puppet", "listen closely fool i will only say this once"])
+        s.spoke_until = time.monotonic()
+        during = s.spoke_until - 2
+        assert s.echo_of_own_words("you dare call me a puppet", during)                            # exact, as before
+        assert s.echo_of_own_words("dare call me a puppet listen closely fool i will", during)     # across two lines
+        assert s.echo_of_own_words("you dare call me a puppet listen closely full i will only", during)  # misheard
+        assert not s.echo_of_own_words("yes i dare call you a puppet", during)                     # an answer
+        assert not s.echo_of_own_words("stop", during)
+        # begun after he had finished: someone quoting him, not echo
+        assert not s.echo_of_own_words("listen closely fool i will only say this", s.spoke_until + 3)
+
+    asyncio.run(check())
+
+
+def test_echo_heard_while_he_speaks_gets_no_reply():
+    async def check():
+        s = make_session(stt=NS(transcribe=AsyncMock(return_value="Dare call me a puppet? Listen closely, fool, I will")))
+        s.active = True
+        s.focus, s.focus_until = 1, time.monotonic() + 90
+        s.recent_outputs.extend(["you dare call me a puppet", "listen closely fool i will only say this once"])
+        s.spoke_until = time.monotonic()
+        worker = asyncio.create_task(s.transcribe_loop())
+        s.enqueue(Utterance(1, b"pcm", s.spoke_until - 2, s.spoke_until))
+        await asyncio.sleep(0.3)
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
+        assert s.metrics["echo_dropped"] == 1
+        s.respond.assert_not_awaited()
+
+    asyncio.run(check())
+
+
+def test_the_line_being_voiced_counts_as_said_while_it_plays():
+    async def check():
+        during, playing_at = [], []
+
+        async def play(audio):
+            playing_at.append(time.monotonic())
+            during.append(s.echo_of_own_words("listen closely fool i will only say", playing_at[-1]))
+            return True
+
+        s = make_session(playback=NS(play=play, stop=AsyncMock(), vc=NS(is_playing=lambda: False), source=None))
+        s.active = True
+        assert await s.submit(1, "story", reply="Listen closely, fool, I will only say this once.")
+        await asyncio.wait_for(s.response_task, 2)
+        assert during == [True]  # its echo is transcribed before the line has finished playing
+        assert s.state != State.BOT_SPEAKING
+        assert s.echo_of_own_words("listen closely fool i will only say", playing_at[0])  # ...or just after
+
+    asyncio.run(check())

@@ -10,6 +10,7 @@ import random
 import re
 import time
 from collections import Counter, deque
+from difflib import SequenceMatcher
 from enum import Enum
 
 from . import names
@@ -178,6 +179,7 @@ class Session:
         self.last_speech, self.started = 0.0, time.monotonic()
         self.reported_failures = set()
         self.recent_outputs = deque(maxlen=4)
+        self.spoke_until = 0.0  # when the bot's last spoken line finished playing
         self.feature_router = None
 
     def busy(self):
@@ -274,6 +276,24 @@ class Session:
                     self.response_task.cancel()
             if uid == self.focus:
                 self.focus, self.focus_until = None, 0
+
+    def echo_of_own_words(self, normalized, started):
+        """Someone's microphone picking up the bot's own voice from their loudspeaker.
+
+        An exact repeat of a recent line always counts. Whisper seldom writes echo exactly as the line was written,
+        and one stretch of echo often runs across two lines, so an utterance that began while the bot was speaking
+        and is almost word for word what it just said counts too. Answering that made the bot talk to itself.
+        """
+        if not normalized:
+            return False
+        if normalized in self.recent_outputs:
+            return True
+        heard = normalized.split()
+        if len(heard) < 4 or not (self.state == State.BOT_SPEAKING or started <= self.spoke_until):
+            return False
+        said = " ".join(self.recent_outputs).split()
+        matcher = SequenceMatcher(None, heard, said, autojunk=False)
+        return sum(block.size for block in matcher.get_matching_blocks()) >= 0.8 * len(heard)
 
     def leave_after_failure(self, category):
         """Hand a session that can no longer hear back to the integration, which leaves the channel and says so.
@@ -442,7 +462,7 @@ class Session:
             )
             # Acoustic echo from a participant's loudspeaker is still human-attributed.
             normalized = re.sub(r"\W+", " ", text.lower()).strip()
-            if normalized and any(normalized == old for old in self.recent_outputs):
+            if self.echo_of_own_words(normalized, utterance.started):
                 self.metrics["echo_dropped"] += 1
                 self.decision("discarded_echo", uid)
                 continue
@@ -641,6 +661,7 @@ class Session:
         self.metrics["spoken_chunks"] += 1
         self.decision("playback_completed", uid)
         self.recent_outputs.append(re.sub(r"\W+", " ", line.lower()).strip())
+        self.spoke_until = time.monotonic()
         if self.focus == uid:
             self.focus_until = time.monotonic() + 90
         await self.remember(uid, line)
@@ -775,11 +796,13 @@ class Session:
                     self.metrics["first_audio_ms"] = round(
                         (time.monotonic() - start) * 1000
                     )
+                self.recent_outputs.append(re.sub(r"\W+", " ", part.lower()).strip())
                 if reply_override is not None:
                     delivered = await asyncio.wait_for(self.playback.play(audio), 12)
                 else:
                     delivered = await self.playback.play(audio)
                 audio = None
+                self.spoke_until = time.monotonic()
                 if not delivered or not self.current(generation, uid, epoch):
                     self.decision("playback_not_delivered", uid)
                     return
@@ -788,7 +811,6 @@ class Session:
                     self.focus_until = time.monotonic() + 90
                 self.decision("playback_completed", uid)
                 self.metrics["spoken_chunks"] += 1
-                self.recent_outputs.append(re.sub(r"\W+", " ", part.lower()).strip())
                 await self.remember(uid, part)
                 await self.feature_event(
                     "bot_spoken",
