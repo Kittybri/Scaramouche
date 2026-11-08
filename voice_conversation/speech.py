@@ -258,6 +258,11 @@ class GroqSTT:
         # sampled retries that produce most invented text
         form.add_field("response_format", "verbose_json")
         form.add_field("temperature", "0")
+        # Left to guess, Whisper "hears" noise as Russian or Icelandic ("Спасибо.", "Ég er stöð.") and he
+        # answered it. VOICE_STT_LANGUAGE sets the spoken language (ISO 639-1; "auto" lets Whisper detect it).
+        language = (os.getenv("VOICE_STT_LANGUAGE") or "en").strip().lower()
+        if language != "auto":
+            form.add_field("language", language)
         try:
             async with aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=10)

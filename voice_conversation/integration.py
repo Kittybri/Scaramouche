@@ -98,6 +98,8 @@ class VoiceConversation:
             if session.active and uid in session.participants:
                 if await session.submit(uid, "", reply=random.choice(lines)):
                     await asyncio.gather(session.response_task, return_exceptions=True)
+                    # let the last words reach the listener before the voice connection closes
+                    await asyncio.sleep(0.5)
         finally:
             if self.sessions.get(gid) is session:
                 await self.leave(gid, announce=False)

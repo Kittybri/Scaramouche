@@ -99,16 +99,38 @@ def is_interrupt_keyword(text: str, name: str) -> bool:
     # A command may follow the character's name or a little ASR filler. Keep the
     # window short so a later conversational use of these words is not a barge-in.
     opening = words[:6]
-    if any(word in {"wait", "stop", "no", "listen"} for word in opening):
+    if any(word in {"wait", "stop", "no", "listen", "skip", "shush", "shh"} for word in opening):
         return True
     if any(
-        opening[index : index + 2] in (["hold", "on"], ["shut", "up"])
+        opening[index : index + 2] in (["hold", "on"], ["shut", "up"], ["be", "quiet"])
         for index in range(max(0, len(opening) - 1))
     ):
+        return True
+    if words == ["quiet"]:
         return True
     # The old name-only barge-in, accepting the ways speech recognition splits
     # or misspells the character name (shared rules in names.py).
     return names.addressed_at_opening(text, name)
+
+
+_BACKCHANNEL = frozenset({
+    "yeah", "yes", "yep", "yup", "ok", "okay", "kay", "k", "right", "sure", "alright", "fine", "true", "mhm", "mmhm",
+    "mm", "hmm", "uh", "huh", "ah", "oh", "wow", "lol", "haha", "ha", "nice", "cool",
+})
+# His memory labels his spoken lines "[voice spoken] ..."; the model copied the label into its replies, even in
+# place of a name ("[voice spoken], you've managed..."), and every copy was stored and copied again.
+_MEMORY_LABEL = re.compile(r"\[\s*voice\s+(?:spoken|message|note)\s*\]\s*,?\s*", re.I)
+
+
+def is_backchannel(text: str) -> bool:
+    """A listener's "okay", "yeah", "mm-hmm": up to three words, all of them acknowledgements."""
+    found = names.words(text)
+    return 0 < len(found) <= 3 and all(word in _BACKCHANNEL for word in found)
+
+
+def talks_over(text: str) -> bool:
+    """Real words, not just an acknowledgement: enough to stop him when said over him."""
+    return bool(names.words(text)) and not is_backchannel(text)
 
 
 def names_bot_in_opening(text: str, name: str) -> bool:
@@ -213,6 +235,7 @@ class Session:
         self.on_failed = on_failed
         self.mood_of = mood_of  # async uid -> his mood toward that person (-10..10), for reply length
         self.reaction_audio = {}  # interruption reaction line -> audio made ahead of time
+        self.last_spoken = ""  # the last line he voiced, as written
         self.stt_failures, self.stt_failing_since = 0, 0.0
         self.leave_requested = False
         self.leave_task = None
@@ -556,8 +579,18 @@ class Session:
                 keyword = is_interrupt_keyword(text, self.name) and (
                     uid == self.focus or names_bot_in_opening(text, self.name)
                 )
-                if keyword:
-                    self.decision("interrupt_keyword_detected", uid)
+                # Talking over him with real words stops him too: only the person he is answering, only while he
+                # is voicing a reply (not while he is still thinking, so a follow-up does not cancel his answer).
+                # Noise gives no words, his own voice from a loudspeaker was dropped above as echo, and
+                # "yeah"/"okay" are a listener's acknowledgements. It used to take one of a few exact words.
+                talked_over = (
+                    not keyword
+                    and uid == self.focus
+                    and (self.state == State.BOT_SPEAKING or 0 < self.completed < self.total)
+                    and talks_over(text)
+                )
+                if keyword or talked_over:
+                    self.decision("interrupt_keyword_detected" if keyword else "interrupt_talked_over", uid)
                     if self.busy():
                         self.metrics["interrupt_attempted"] += 1
                         await self.interrupt(uid, utterance.started)
@@ -624,6 +657,16 @@ class Session:
                 self.leave_task = asyncio.create_task(self.on_spoken_leave(uid))
                 continue
             plan = await self.feature_event("utterance_completed", uid, text)
+            if (
+                is_backchannel(text)
+                and not plan.get("reply")
+                and not plan.get("force_reply")
+                and not plan.get("context")
+                and not self.last_spoken.rstrip().endswith("?")
+            ):
+                # "Okay." / "Yes." after a statement used to get a whole new speech each time.
+                self.decision("discarded_backchannel", uid)
+                continue
             if (
                 not self.relevant(uid, text)
                 and "reply" not in plan
@@ -859,7 +902,7 @@ class Session:
             if not self.current(generation, uid, epoch):
                 self.metrics["dropped_stale_jobs"] += 1
                 return
-            pieces = spoken_pieces(reply[:12000])
+            pieces = spoken_pieces(_MEMORY_LABEL.sub("", reply or "")[:12000])
             if not pieces:
                 self.decision("empty_response", uid)
             self.total = self.completed + len(pieces)
@@ -896,6 +939,7 @@ class Session:
                         (time.monotonic() - start) * 1000
                     )
                 self.recent_outputs.append(re.sub(r"\W+", " ", part.lower()).strip())
+                self.last_spoken = part
                 if reply_override is not None:
                     delivered = await asyncio.wait_for(self.playback.play(audio), 12)
                 else:
@@ -936,6 +980,8 @@ class Session:
                 self.state = State.LISTENING
 
     async def interrupt(self, uid, speech_started):
+        if self.leave_requested:
+            return  # he is saying goodbye: let him finish the line, then he leaves
         if (
             uid not in self.participants
             or not self.response_task

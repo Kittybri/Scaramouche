@@ -162,6 +162,14 @@ class ReceiveBackend:
                     after = session.get_decryption_stats(uid)
                     if not decoded or not after or after.successes <= successes:
                         failure_stage = "dave_unverified_drops"
+                        # What is being dropped decides whether it costs words: Discord's 3-byte Opus silence
+                        # frames are harmless; passed-through voice frames are lost speech. Counts only.
+                        if decoded and len(decoded) <= 3:
+                            backend.metrics["dave_unverified_silence"] += 1
+                        elif decoded and getattr(after, "passthroughs", 0) > getattr(before, "passthroughs", 0):
+                            backend.metrics["dave_unverified_passthrough_voice"] += 1
+                        else:
+                            backend.metrics["dave_unverified_other"] += 1
                         raise ValueError("empty_decrypted_payload")
                     packet.decrypted_data = decoded
                     backend.metrics["dave_frames"] += 1

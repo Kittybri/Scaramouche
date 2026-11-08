@@ -90,7 +90,7 @@ legacy alias that ends the whole session, not a per-person setting.
 | `!voice mode direct_only` | Optional strict mode requiring the bot's spoken name |
 | `!voice mode conversation` | Default: answer the focused participant for 90 seconds after playback; explicit partner addressing clears focus |
 | `!voice mode active_room` | Answer any eligible human in the active room; never bots or people outside it |
-| `!voice interrupt keyword` | Default: focused speaker + clear interruption phrase |
+| `!voice interrupt keyword` | Default: focused speaker + clear interruption phrase, or real words said over a reply being voiced (not noise, echo or "okay"/"yeah") |
 | `!voice interrupt natural` | Focused participant's sustained speech can stop output |
 | `!voice interrupt off` | Finish current output before handling another turn |
 | `!voice interrupt me natural` | Override your own session interruption preference |
@@ -124,6 +124,7 @@ stretch (`VOICE_MIN_SPEECH_DENSITY`, default 0.4). Replies are voiced piece by p
 own, each following piece synthesized while the previous one plays. Playback levels every clip to
 `VOICE_LOUDNESS_LUFS` (default -18; `off` disables it), and `VOICE_EMOTION_TAGS=off` turns off the Fish S2
 delivery cues and speed changes chosen from the voice state.
+Whisper is given the spoken language (`VOICE_STT_LANGUAGE`, default `en`; `auto` lets it detect the language).
 Silence/noise does not create an STT job. A wall-clock flush handles Discord ceasing
 to send silence packets. Different speakers have separate audio buffers. Overlap
 delays replies; a bounded same-user continuation can be joined after cues such as
