@@ -1447,6 +1447,14 @@ _PERSONAL_CURRENT = re.compile(
     r"love me|hate me|miss me|our relationship)\b", re.I,
 )
 
+# A reply that says it checked sources when the search returned none: citation marks or "according to sources".
+_CLAIMS_VERIFICATION = re.compile(
+    r"\[\d+\]|\baccording to (?:the |my )?(?:sources?|search|results?|reports?|web|internet)\b|"
+    r"\b(?:sources?|search results?) (?:say|says|show|shows|confirm|confirms|indicate)\b|"
+    r"\bI (?:just )?(?:checked|searched|looked (?:it |this )?up|verified)\b",
+    re.I,
+)
+
 def needs_search(text: str) -> bool:
     """Search only explicit, current, live, or clearly changeable factual requests."""
     value = " ".join((text or "").split())
@@ -1454,7 +1462,8 @@ def needs_search(text: str) -> bool:
         return False
     if _EXPLICIT_SEARCH.search(value):
         return True
-    if _CURRENT_SEARCH.search(value) and not _PERSONAL_CURRENT.search(value):
+    # "now", "today", "current" alone are everyday words ("I'm going to bed now"): only a question searches
+    if _CURRENT_SEARCH.search(value) and "?" in value and not _PERSONAL_CURRENT.search(value):
         return True
     if _VOLATILE_SEARCH.search(value) and ("?" in value or len(value.split()) >= 3):
         return True
@@ -1980,7 +1989,10 @@ async def _generate_character_reply(context):
     fallback_used = not bool(reply)
     if fallback_used:
         reply = fallback_reply(BOT_NAME, context.recent_replies)
-    if search_active and not context.grounding_bundle.sources:
+    # A search that found nothing used to replace every reply with a fixed "The search came back empty..." line,
+    # which then turned up in ordinary chat (and Wanderer, reading the channel, started repeating it). The model is
+    # told the search failed; its reply is kept unless it still claims sources or a check it never made.
+    if search_active and not context.grounding_bundle.sources and _CLAIMS_VERIFICATION.search(reply or ""):
         fallback_used = True
         reply = (
             "The search came back empty, so I’m not inventing an answer merely to look "

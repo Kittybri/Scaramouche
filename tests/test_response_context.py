@@ -190,6 +190,8 @@ def test_search_decision_targets_current_and_explicit_requests(runtime):
     assert not runtime.needs_search("Who is Nahida?")
     assert not runtime.needs_search("What is two plus two?")
     assert not runtime.needs_search("*leans against the wall and waits*")
+    assert not runtime.needs_search("I'm going to bed now")
+    assert not runtime.needs_search("Today was rough, Scaramouche")
 
 
 def test_grounding_policy_is_added_to_system_and_user_prompt(runtime):
@@ -346,6 +348,25 @@ def test_failed_current_grounding_cannot_claim_fake_verification(runtime, monkey
     assert "[1]" not in generated.text
     assert generated.used_search
     provider.assert_called_once()
+
+
+def test_an_empty_search_keeps_an_ordinary_reply(runtime, monkeypatch):
+    # The fixed "The search came back empty..." line used to replace every reply whenever a search found nothing.
+    context = make_context(runtime, message="what are you doing today?")
+    context.grounding_bundle = GroundingBundle(
+        query="what are you doing today?", factual_context="retrieval failed",
+        current_info_requested=True, confidence="NONE",
+    )
+    provider = Mock(return_value=NS(choices=[NS(message=NS(content="Tolerating you. What else would I be doing?"))]))
+    monkeypatch.setattr(runtime, "ai", NS(call_with_retry=provider))
+    monkeypatch.setattr(runtime, "environment_monitor", NS(
+        record_provider_success=Mock(), record_provider_failure=Mock(),
+    ))
+
+    generated = run(runtime._generate_character_reply(context))
+
+    assert "Tolerating you" in generated.text
+    assert "search came back empty" not in generated.text
 
 
 def test_provider_failure_is_counted_but_programming_failure_is_not(
